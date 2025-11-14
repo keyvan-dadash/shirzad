@@ -50,7 +50,7 @@ agc = gain.SimpleAgc( ...
     'MaximumGain_dB',     30, ...
     'AdaptationStepSize', 1e-3, ...
     'TargetPower',        1.0);
-dcblock = dsp.DCBlocker('Length',64);
+dcblock = filters.DcBlocker('Length',64);
 
 % Carrier sync: coarse (startup) and fine (steady-state) at 1 sps
 carSyncCoarse = sync.DecisionDirectedCarrierSync( ...
@@ -109,7 +109,7 @@ while true
         continue;
     end
 
-    x = dcblock(x);
+    x = dcblock.process(x);
     if ~useFine
         x = agc.process(x);
     end
