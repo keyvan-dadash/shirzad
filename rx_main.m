@@ -23,6 +23,9 @@ rxGain_dB   = 3;              %#ok<NASGU>  % not used here, but kept for symmetr
 
 SamplesPerFrame = 4000;      % max UDP samples we are willing to accept
 
+modQPSK = modulators.QpskModulator();
+demQPSK = demodulators.QpskDemodulator();
+
 %% ---------- FEC (rate 1/2, K=7) ----------
 useFEC = true;                              % toggle on/off
 R    = 1/2;
@@ -35,17 +38,17 @@ vitDec = comm.ViterbiDecoder( ...
 tb = vitDec.TracebackDepth;
 
 % Reference *info* bits (same seed as TX) for BER display only:
-infoBitsLen = round(payloadSyms*bps*R);     % for QPSK: 272*2*1/2 = 272
+infoBitsLen = round(payloadSyms*bps*R);     % for QPSK: 270*2*1/2 = 270
 rng(1001); refBits_info = randi([0 1], infoBitsLen, 1);
 encRefBits  = convenc(refBits_info, trel);  % used ONLY to pick the correct quadrant
 
 %% ---------- Known preamble (match TX exactly) ----------
 rng(42); preBits = randi([0 1], preambleLen*bps, 1);
-preSyms = qammod(preBits, M, 'gray', 'InputType','bit', 'UnitAveragePower', true);
+preSyms = modQPSK.modulate(preBits);
 EpreS   = sum(abs(preSyms).^2);
 
 % Demapper (hard bits)
-qamDemBits = @(z) qamdemod(z, M, 'gray', 'OutputType','bit', 'UnitAveragePower', true);
+qamDemBits = @(z) demQPSK.demodulateHard(z);
 
 %% ---------- DSP chain ----------
 rrcRX  = comm.RaisedCosineReceiveFilter( ...
@@ -86,8 +89,8 @@ sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
 
 %% ---------- Symbol-rate detector thresholds ----------
 MU_THR_S  = 0.75;    % normalized corr peak @ 1 sps
-PSR_THR_S = 2.0;     % peak-to-sidelobe ratio
-POW_THR_S = 0.95;    % corr-window power / median
+PSR_THR_S = 0.99;    % peak-to-sidelobe ratio
+POW_THR_S = 0.97;    % corr-window power / median
 
 %% ---------- Receive/decode loop ----------
 disp('RX (UDP): waiting for frames…');
@@ -191,18 +194,24 @@ while true
     [~, ig] = min(errs);
     rxSyms = rxSyms_eq * G(ig);
 
+    % ---- update constellation viewer ----
+    if isvalid(hRx)
+        set(hRx, 'XData', real(rxSyms), ...
+                 'YData', imag(rxSyms));
+        drawnow limitrate;
+    end
+
     % ===== Soft LLRs for Viterbi (if FEC enabled) =====
     if useFEC
         % Decision-directed noise variance for LLRs
         hb  = qamDemBits(rxSyms);
-        zh  = qammod(hb, M, 'gray', 'InputType','bit', 'UnitAveragePower', true);
+        zh  = modQPSK.modulate(hb);
         cH  = (zh' * rxSyms) / (zh' * zh + eps);
         eV  = rxSyms - cH * zh;
         varComplex  = max(mean(abs(eV).^2), 1e-8);     % complex noise variance
         noiseVarLLR = varComplex / 2;                  % per dimension
 
-        llr = qamdemod(rxSyms, M, 'gray', 'OutputType','approxllr', ...
-                       'UnitAveragePower', true, 'NoiseVariance', noiseVarLLR);
+        llr = demQPSK.demodulateLlr(rxSyms, noiseVarLLR);
         % approxllr = log(P(b=1)/P(b=0)) => positive=1, negative=0
 
         reset(vitDec);
@@ -227,7 +236,7 @@ while true
 
     % ---- decision-directed EVM -> Es/N0 (clean SNR) ----
     hb2 = qamDemBits(rxSyms);
-    zh2 = qammod(hb2, M, 'gray', 'InputType','bit', 'UnitAveragePower', true);
+    zh2 = modQPSK.modulate(hb2);
     cHd = (zh2' * rxSyms) / (zh2' * zh2 + eps);
     err = rxSyms - cHd * zh2;
     Es  = mean(abs(cHd * zh2).^2);

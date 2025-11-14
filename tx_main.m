@@ -18,6 +18,8 @@ payloadSyms = 270;
 txGain_dB   = 3;
 useExternalRef = false;
 
+modQPSK = modulators.QpskModulator();
+
 %% ---------- FEC ----------
 R    = 1/2;
 trel = poly2trellis(7,[171 133]);
@@ -49,7 +51,8 @@ txSink = sinks.UDPWaveformSink( ...
 % Preamble (uncoded)
 rng(42);
 preBits = randi([0 1], preambleLen*bps, 1);
-preSyms = qammod(preBits, M, 'gray', 'InputType','bit', 'UnitAveragePower', true);
+% preSyms = qammod(preBits, M, 'gray', 'InputType','bit', 'UnitAveragePower', true);
+preSyms = modQPSK.modulate(preBits);
 
 % Pulse shaping filter
 txRRC  = comm.RaisedCosineTransmitFilter( ...
@@ -69,8 +72,9 @@ while true
 
     % ---- encode and modulate as in original ----
     encBits = convEnc(payloadBits_info);           % length = payloadSyms*bps
-    paySyms = qammod(encBits, M, 'gray', ...
-                     'InputType','bit','UnitAveragePower', true);
+    % paySyms = qammod(encBits, M, 'gray', ...
+                     % 'InputType','bit','UnitAveragePower', true);
+    paySyms = modQPSK.modulate(encBits);
 
     frmSyms = [preSyms; paySyms];
     txWave  = txRRC(frmSyms);
