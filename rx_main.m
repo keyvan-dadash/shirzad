@@ -187,6 +187,14 @@ while true
     % ===== Hard-decision demod and BER (NO FEC) =====
     rxBits = qamDemBits(rxSyms);
 
+    errMask = (rxBits(1:infoBitsLen) ~= refBits_info);
+    errIdx  = find(errMask);
+    
+    
+    fprintf('Error indices this frame: ');
+    disp(errIdx.');
+    
+
     frameBER = mean(rxBits(1:infoBitsLen) ~= refBits_info);
     totErr   = totErr + sum(rxBits(1:infoBitsLen) ~= refBits_info);
     totBits  = totBits + infoBitsLen;
