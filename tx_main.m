@@ -45,6 +45,11 @@ sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
 disp('TX: streaming frames via UDP. Ctrl+C to stop.');
 
 k = 0;
+cfoHz = 200;
+Fs    = 1e6;
+
+globalSampleIndex = 0;   % or make it persistent in a function
+
 while true
     % Same frame symbols every time
     frmSyms = [preSyms; paySyms];
@@ -59,6 +64,13 @@ while true
 
     % Normalization (optional)
     txWave = txWave ./ max(abs(txWave)) * 0.8;
+
+    N = numel(txWave);
+    n = (0:N-1).' + globalSampleIndex;   % global sample index for this block
+    
+    % txWave = txWave .* exp(1j*2*pi*cfoHz*n/Fs);
+    
+    globalSampleIndex = globalSampleIndex + N;
 
     sa(txWave);
     txSink.writeFrame(txWave, struct('FrameIndex', k+1));
