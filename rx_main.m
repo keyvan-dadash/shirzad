@@ -1,26 +1,27 @@
-% RX: QPSK/16-QAM over USRP N210 with symbol-rate preamble detection
+% RX over UDP: QPSK/16-QAM with symbol-rate preamble detection
 %     + CFO/phase pre-corr + tight PLL + FEC (rate-1/2) + decision-directed SNR
 clear; clc;
 
-assert(exist('comm.SDRuReceiver','class')==8, ...
-  ['Install "Communications Toolbox Support Package for USRP Radio". ', ...
-   'Home > Add-Ons > Get Hardware Support Packages.']);
+% For UDP loopback we need DSP System Toolbox (dsp.UDPReceiver)
+assert(exist('dsp.UDPReceiver','class')==8, ...
+  ['Install "DSP System Toolbox" for UDP receiver support.']);
 
-%% ---------- User/Radio params (MUST MATCH TX) ----------
-fc              = 10e6;     % 10 MHz for LFRX/LFTX (match TX)
-MasterClockRate = 100e6;
-Fs              = 1e6;
-Decim           = MasterClockRate/Fs;  assert(round(Decim)==Decim,'Decim must be integer');
+%% ---------- User/link params (MUST MATCH TX) ----------
+fc              = 10e6;     % kept for consistency (not used in UDP mode)
+MasterClockRate = 100e6;   % same
+Fs              = 1e6;     % symbol-rate * sps
+Decim           = MasterClockRate/Fs;  %#ok<NASGU>  % not used in UDP mode
 
 M   = 4;                      % 4=QPSK, 16=16-QAM
 bps = log2(M);
-sps = 10; beta = 0.35; span = 10;     % <-- keep sps=10 to match TX
+sps = 10; beta = 0.35; span = 10;     % keep sps=10 to match TX
 
+% IMPORTANT: these must match TX settings
 preambleLen = 128;            % symbols
-payloadSyms = 2000;           % symbols/frame
-rxGain_dB   = 3;
+payloadSyms = 270;            % symbols/frame (reduced to fit one UDP packet)
+rxGain_dB   = 3;              %#ok<NASGU>  % not used here, but kept for symmetry
 
-SamplesPerFrame = 32768;
+SamplesPerFrame = 4000;      % max UDP samples we are willing to accept
 
 %% ---------- FEC (rate 1/2, K=7) ----------
 useFEC = true;                              % toggle on/off
@@ -34,7 +35,7 @@ vitDec = comm.ViterbiDecoder( ...
 tb = vitDec.TracebackDepth;
 
 % Reference *info* bits (same seed as TX) for BER display only:
-infoBitsLen = round(payloadSyms*bps*R);     % for QPSK: 2000*2*1/2 = 2000
+infoBitsLen = round(payloadSyms*bps*R);     % for QPSK: 272*2*1/2 = 272
 rng(1001); refBits_info = randi([0 1], infoBitsLen, 1);
 encRefBits  = convenc(refBits_info, trel);  % used ONLY to pick the correct quadrant
 
@@ -62,20 +63,21 @@ carSyncFine   = comm.CarrierSynchronizer( ...
     'DampingFactor',0.707,'NormalizedLoopBandwidth',0.002);   % tighter
 carSyncNow = carSyncCoarse; useFine = false;
 
-%% ---------- Radio ----------
-rx = comm.SDRuReceiver('Platform','N200/N210/USRP2', ...
-    'IPAddress','192.168.10.4', ...
-    'CenterFrequency',fc, ...
-    'MasterClockRate',MasterClockRate, ...
-    'DecimationFactor',Decim, ...
-    'Gain',rxGain_dB, ...
-    'SamplesPerFrame',SamplesPerFrame, ...
-    'OutputDataType','double', ...
-    'TransportDataType','int16', ...
-    'EnableBurstMode',false);
-try, rx.Antenna = 'RX2'; end
+%% ---------- Source & Sink (UDP instead of USRP) ----------
+udpPort = 31000;    % must match TX UDP sink
 
-for i=1:10, step(rx); end   % warm up & flush
+% RF source: UDPWaveformSource (complex double, blocking)
+rfSrc = sources.UDPWaveformSource( ...
+    'LocalIPPort',          udpPort, ...
+    'SampleRate',           Fs, ...
+    'MaximumMessageLength', SamplesPerFrame, ...
+    'IsMessageComplex',     true, ...
+    'MessageDataType',      'double', ...
+    'Blocking',             true, ...
+    'TimeoutSeconds',       1.0);
+
+% Payload sink: collects decoded payload bits
+paySink = sinks.PayloadCollectorSink();
 
 %% ---------- Spectrum analyzer (optional) ----------
 sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
@@ -88,15 +90,20 @@ PSR_THR_S = 2.0;     % peak-to-sidelobe ratio
 POW_THR_S = 0.95;    % corr-window power / median
 
 %% ---------- Receive/decode loop ----------
-disp('RX: waiting for frames…');
+disp('RX (UDP): waiting for frames…');
 yBuf   = complex([]); 
 frames = 0;
 totErr  = 0;
 totBits = 0;
 
 while true
-    % Pull chunk
-    [x,len] = rx(); if len==0, pause(0.005); continue; end
+    % Pull chunk from Source (UDP)
+    [x, srcInfo] = rfSrc.readFrame();
+    if ~srcInfo.IsValid
+        pause(0.005);
+        continue;
+    end
+
     x = dcblock(x);
     if ~useFine, x = agc(x); end
     sa(x);
@@ -110,7 +117,7 @@ while true
     if numel(yBuf) > maxHold, yBuf = yBuf(end-maxHold+1:end); end
     if numel(yBuf) < preambleLen*sps + payloadSyms*sps + 8*sps, continue; end
 
-    % ================= SYMBOL-RATE DETECTION (unchanged logic) =================
+    % ================= SYMBOL-RATE DETECTION (same logic) =================
     bestFound = false;
     best = struct('off',0,'pk',-inf,'idx',0,'PSR',0,'pow',0);
 
@@ -119,8 +126,8 @@ while true
         if numel(ySym) < preambleLen + payloadSyms + 8, continue; end
 
         rS  = filter(conj(flipud(preSyms)), 1, ySym);               % correlation @ 1 sps
-        eyS = filter(ones(preambleLen,1), 1, abs(ySym).^2);          % window power
-        muS = (abs(rS).^2) ./ max(EpreS * (eyS), eps);               % 0..1
+        eyS = filter(ones(preambleLen,1), 1, abs(ySym).^2);         % window power
+        muS = (abs(rS).^2) ./ max(EpreS * (eyS), eps);              % 0..1
 
         [pkS, idxS] = max(muS);
 
@@ -143,11 +150,9 @@ while true
 
     if ~bestFound, continue; end
 
-    % If you see mu~0.98 but PSR~1, temporarily relax PSR gating while debugging:
+    % If you see mu~0.98 but PSR~1, you can relax PSR gating while debugging
     if ~(best.pk > MU_THR_S && best.pow > POW_THR_S && best.PSR > PSR_THR_S)
         fprintf('mu=%.2f PSR=%.2f Pow=%.2f\n', best.pk, best.PSR, best.pow);
-        % Debug fallback (uncomment next line for quick lock): 
-        % if (best.pk > 0.90 && best.pow > 0.90), best.PSR = PSR_THR_S+1; else, continue; end
         continue;
     end
 
@@ -172,7 +177,7 @@ while true
     m            = (payStartS : payStartS + payloadSyms - 1).' - preStartS;
     rxSyms_raw   = ySym(payStartS : payStartS + payloadSyms - 1) .* exp(-1j*(phi0 + wSym*m));
 
-    % ---- carrier/phase recovery at 1 sps (coarse then fine after a few frames) ----
+    % ---- carrier/phase recovery at 1 sps (coarse then fine) ----
     rxSyms_eq = carSyncNow(rxSyms_raw);
 
     % ---- Resolve ±/±j quadrant using coded hard bits vs reference coding ----
@@ -198,7 +203,7 @@ while true
 
         llr = qamdemod(rxSyms, M, 'gray', 'OutputType','approxllr', ...
                        'UnitAveragePower', true, 'NoiseVariance', noiseVarLLR);
-        % approxllr = log(P(b=1)/P(b=0)) => positive=1, negative=0 (matches Viterbi 'Unquantized')
+        % approxllr = log(P(b=1)/P(b=0)) => positive=1, negative=0
 
         reset(vitDec);
         decBits = vitDec(llr);
@@ -208,11 +213,15 @@ while true
         frameBER = mean(decBits ~= refBits_info);
         totErr   = totErr + sum(decBits ~= refBits_info);
         totBits  = totBits + numel(refBits_info);
+
+        payBits = decBits;
     else
         rxBits = qamDemBits(rxSyms);
-        frameBER = mean(rxBits(1:infoBitsLen) ~= refBits_info);  % only for display
+        frameBER = mean(rxBits(1:infoBitsLen) ~= refBits_info);
         totErr   = totErr + sum(rxBits(1:infoBitsLen) ~= refBits_info);
         totBits  = totBits + infoBitsLen;
+
+        payBits = rxBits(1:infoBitsLen);
     end
     cumBER  = totErr / max(totBits,1);
 
@@ -225,7 +234,10 @@ while true
     Nv  = mean(abs(err).^2);
     SNRdB = 10*log10(max(Es/Nv, eps));      % ≈ Es/N0 in dB
 
+    % ---- frame count & sink write ----
     frames = frames + 1;
+    paySink.writeFrame(payBits, struct('FrameIndex',frames));
+
     fprintf(['Frame %d | off=%d | mu=%.2f | PSR=%.2f | PowRatio=%.2f | ' ...
              'BER=%.3e | CUM=%.3e (%d bits) | Es/N0≈%.1f dB | CFO(rad/sym)=%.3g\n'], ...
             frames, off, best.pk, best.PSR, best.pow, ...
