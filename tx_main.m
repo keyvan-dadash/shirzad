@@ -1,89 +1,70 @@
 clear; clc;
 
-assert(exist('comm.SDRuTransmitter','class')==8, ...
-  ['Install "Communications Toolbox Support Package for USRP Radio". ', ...
-   'Home > Add-Ons > Get Hardware Support Packages.']);
-
-%% ---------- Shared params (match RX) ----------
+%% ---------- Params ----------
 fc              = 10e6;
 MasterClockRate = 100e6;
 Fs              = 1e6;
-Interp          = MasterClockRate/Fs;  assert(round(Interp)==Interp,'Interp must be integer');
+Interp          = MasterClockRate/Fs;
 
-M   = 4;  bps = log2(M);   % QPSK
+M   = 4;  bps = log2(M);
 sps = 10; beta = 0.35; span = 10;
 
 preambleLen = 128;
 payloadSyms = 270;
 txGain_dB   = 3;
-useExternalRef = false;
 
 modQPSK = modulators.QpskModulator();
 
-%% ---------- Payload length (NO FEC) ----------
-% We send uncoded bits directly into the QPSK modulator.
-infoBitsLen = payloadSyms * bps;   % bits per frame
+%% ---------- Fixed known payload (no FEC) ----------
+infoBitsLen = payloadSyms * bps;   % 270*2 = 540 bits
 
-%% ---------- Sources & Sinks ----------
-% Payload source (replaces rng + randi in original)
-payloadSrc = sources.PayloadBitSource(infoBitsLen, 'Seed', 1001);
+% This must match RX:
+rng(1001);
+payloadBits_info = randi([0 1], infoBitsLen, 1);
+paySyms = modQPSK.modulate(payloadBits_info);
 
-% TX sink (USRP) - still here if you want it later
-% txSink = sinks.SDRuWaveformSink( ...
-%     'IPAddress',          '192.168.10.5', ...
-%     'CenterFrequency',    fc, ...
-%     'MasterClockRate',    MasterClockRate, ...
-%     'InterpolationFactor',Interp, ...
-%     'Gain',               txGain_dB, ...
-%     'UseExternalRef',     useExternalRef);
+% Preamble (uncoded, fixed)
+rng(42);
+preBits = randi([0 1], preambleLen*bps, 1);
+preSyms = modQPSK.modulate(preBits);
 
-% For now: UDP loopback sink
+%% ---------- RRC filter (STREAMING) ----------
+txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
+
+%% ---------- UDP sink ----------
 txSink = sinks.UDPWaveformSink( ...
     'RemoteIPAddress', '127.0.0.1', ...
     'RemoteIPPort',    31000, ...
     'SampleRate',      Fs);
 
-%% ---------- Waveform chain ----------
-% Preamble (uncoded)
-rng(42);
-preBits = randi([0 1], preambleLen*bps, 1);
-preSyms = modQPSK.modulate(preBits);
-
-% Pulse shaping filter (root raised cosine)
-txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
-
-% Spectrum analyzer (optional)
 sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
-    'PlotAsTwoSidedSpectrum',true, 'SpectrumType','Power density', ...
+    'PlotAsTwoSidedSpectrum',true, ...
+    'SpectrumType','Power density', ...
     'Title','TX waveform spectrum');
 
-disp('TX: streaming frames via UDPWaveformSink. Ctrl+C to stop.');
+disp('TX: streaming frames via UDP. Ctrl+C to stop.');
 
 k = 0;
 while true
-    % ---- get payload bits from Source ----
-    [payloadBits_info, infoPay] = payloadSrc.readFrame();
-
-    % ---- modulate (NO FEC) ----
-    % Previously: encBits = convEnc(payloadBits_info);
-    %             paySyms = modQPSK.modulate(encBits);
-    paySyms = modQPSK.modulate(payloadBits_info);
-
+    % Same frame symbols every time
     frmSyms = [preSyms; paySyms];
 
-    % --- Up-sample by sps and apply RRC pulse shaping ---
+    % Up-sample by sps
     up = zeros(numel(frmSyms)*sps, 1);
     up(1:sps:end) = frmSyms;
 
+    % IMPORTANT: use txRRC.process *inside* the loop
+    % so filter state is continuous across frames
     txWave = txRRC.process(up);
+
+    % Normalization (optional)
     txWave = txWave ./ max(abs(txWave)) * 0.8;
 
-    % ---- visualize + send via Sink ----
     sa(txWave);
-    txSink.writeFrame(txWave, struct('FrameIndex', infoPay.FrameIndex));
+    txSink.writeFrame(txWave, struct('FrameIndex', k+1));
 
     k = k+1;
-    if mod(k,50)==0
-        fprintf('TX sent %d frames...\n',k);
+    if mod(k,50) == 0
+        fprintf('TX sent %d frames...\n', k);
     end
 end
