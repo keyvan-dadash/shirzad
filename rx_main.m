@@ -45,7 +45,11 @@ qamDemBits = @(z) demQPSK.demodulateHard(z);
 
 %% ---------- DSP chain ----------
 rrcRX  = filters.RootRaisedCosineFilter(beta, span, sps);
-agc     = comm.AGC('AveragingLength',1000,'MaximumGain',30,'AdaptationStepSize',1e-3);
+agc = gain.SimpleAgc( ...
+    'AveragingLength',    1000, ...
+    'MaximumGain_dB',     30, ...
+    'AdaptationStepSize', 1e-3, ...
+    'TargetPower',        1.0);
 dcblock = dsp.DCBlocker('Length',64);
 
 % Carrier sync: coarse (startup) and fine (steady-state) at 1 sps
@@ -106,7 +110,9 @@ while true
     end
 
     x = dcblock(x);
-    if ~useFine, x = agc(x); end
+    if ~useFine
+        x = agc.process(x);
+    end
     sa(x);
 
     % Matched filter (still at sps)
