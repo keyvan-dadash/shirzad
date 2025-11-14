@@ -20,20 +20,15 @@ useExternalRef = false;
 
 modQPSK = modulators.QpskModulator();
 
-%% ---------- FEC ----------
-R    = 1/2;
-trel = poly2trellis(7,[171 133]);
-convEnc = comm.ConvolutionalEncoder( ...
-    'TrellisStructure', trel, ...
-    'TerminationMethod','Truncated');
-
-infoBitsLen = round(payloadSyms * bps * R);
+%% ---------- Payload length (NO FEC) ----------
+% We send uncoded bits directly into the QPSK modulator.
+infoBitsLen = payloadSyms * bps;   % bits per frame
 
 %% ---------- Sources & Sinks ----------
 % Payload source (replaces rng + randi in original)
 payloadSrc = sources.PayloadBitSource(infoBitsLen, 'Seed', 1001);
 
-% TX sink (USRP)
+% TX sink (USRP) - still here if you want it later
 % txSink = sinks.SDRuWaveformSink( ...
 %     'IPAddress',          '192.168.10.5', ...
 %     'CenterFrequency',    fc, ...
@@ -42,22 +37,19 @@ payloadSrc = sources.PayloadBitSource(infoBitsLen, 'Seed', 1001);
 %     'Gain',               txGain_dB, ...
 %     'UseExternalRef',     useExternalRef);
 
+% For now: UDP loopback sink
 txSink = sinks.UDPWaveformSink( ...
     'RemoteIPAddress', '127.0.0.1', ...
     'RemoteIPPort',    31000, ...
     'SampleRate',      Fs);
 
-%% ---------- Waveform chain (unchanged algorithms) ----------
+%% ---------- Waveform chain ----------
 % Preamble (uncoded)
 rng(42);
 preBits = randi([0 1], preambleLen*bps, 1);
-% preSyms = qammod(preBits, M, 'gray', 'InputType','bit', 'UnitAveragePower', true);
 preSyms = modQPSK.modulate(preBits);
 
-% Pulse shaping filter
-% txRRC  = comm.RaisedCosineTransmitFilter( ...
-%     'RolloffFactor',beta,'FilterSpanInSymbols',span,'OutputSamplesPerSymbol',sps);
-
+% Pulse shaping filter (root raised cosine)
 txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
 
 % Spectrum analyzer (optional)
@@ -65,23 +57,21 @@ sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
     'PlotAsTwoSidedSpectrum',true, 'SpectrumType','Power density', ...
     'Title','TX waveform spectrum');
 
-disp('TX: streaming frames via SDRuWaveformSink. Ctrl+C to stop.');
+disp('TX: streaming frames via UDPWaveformSink. Ctrl+C to stop.');
 
 k = 0;
 while true
     % ---- get payload bits from Source ----
     [payloadBits_info, infoPay] = payloadSrc.readFrame();
 
-    % ---- encode and modulate as in original ----
-    encBits = convEnc(payloadBits_info);           % length = payloadSyms*bps
-    % paySyms = qammod(encBits, M, 'gray', ...
-                     % 'InputType','bit','UnitAveragePower', true);
-    paySyms = modQPSK.modulate(encBits);
+    % ---- modulate (NO FEC) ----
+    % Previously: encBits = convEnc(payloadBits_info);
+    %             paySyms = modQPSK.modulate(encBits);
+    paySyms = modQPSK.modulate(payloadBits_info);
 
     frmSyms = [preSyms; paySyms];
-    % txWave  = txRRC(frmSyms);
-    % txWave  = txWave ./ max(abs(txWave)) * 0.8;
 
+    % --- Up-sample by sps and apply RRC pulse shaping ---
     up = zeros(numel(frmSyms)*sps, 1);
     up(1:sps:end) = frmSyms;
 

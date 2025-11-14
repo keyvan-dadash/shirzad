@@ -1,5 +1,5 @@
-% RX over UDP: QPSK/16-QAM with symbol-rate preamble detection
-%     + CFO/phase pre-corr + tight PLL + FEC (rate-1/2) + decision-directed SNR
+% RX over UDP: QPSK with symbol-rate preamble detection
+%     + CFO/phase pre-corr + tight PLL + decision-directed SNR (NO FEC)
 clear; clc;
 
 % For UDP loopback we need DSP System Toolbox (dsp.UDPReceiver)
@@ -12,35 +12,28 @@ MasterClockRate = 100e6;   % same
 Fs              = 1e6;     % symbol-rate * sps
 Decim           = MasterClockRate/Fs;  %#ok<NASGU>  % not used in UDP mode
 
-M   = 4;                      % 4=QPSK, 16=16-QAM
+M   = 4;                      % 4=QPSK
 bps = log2(M);
 sps = 10; beta = 0.35; span = 10;     % keep sps=10 to match TX
 
 % IMPORTANT: these must match TX settings
 preambleLen = 128;            % symbols
-payloadSyms = 270;            % symbols/frame (reduced to fit one UDP packet)
-rxGain_dB   = 3;              %#ok<NASGU>  % not used here, but kept for symmetry
+payloadSyms = 270;            % symbols/frame
+rxGain_dB   = 3;              %#ok<NASGU>
 
 SamplesPerFrame = 4000;      % max UDP samples we are willing to accept
 
 modQPSK = modulators.QpskModulator();
 demQPSK = demodulators.QpskDemodulator();
 
-%% ---------- FEC (rate 1/2, K=7) ----------
-useFEC = true;                              % toggle on/off
-R    = 1/2;
-trel = poly2trellis(7,[171 133]);
-vitDec = comm.ViterbiDecoder( ...
-    'TrellisStructure', trel, ...
-    'InputFormat','Unquantized', ...        % LLRs: + => '1',  - => '0'
-    'TracebackDepth', 48, ...
-    'TerminationMethod','Truncated');
-tb = vitDec.TracebackDepth;
+%% ---------- Payload length & reference bits (NO FEC) ----------
+% Uncoded bits per frame:
+infoBitsLen = payloadSyms * bps;   % for QPSK: 270*2 = 540 bits
 
-% Reference *info* bits (same seed as TX) for BER display only:
-infoBitsLen = round(payloadSyms*bps*R);     % for QPSK: 270*2*1/2 = 270
-rng(1001); refBits_info = randi([0 1], infoBitsLen, 1);
-encRefBits  = convenc(refBits_info, trel);  % used ONLY to pick the correct quadrant
+% Reference *info* bits (same seed as TX) for BER & quadrant resolution:
+rng(1001); 
+refBits_info = randi([0 1], infoBitsLen, 1);
+% No encRefBits, no convolutional coding here.
 
 %% ---------- Known preamble (match TX exactly) ----------
 rng(42); preBits = randi([0 1], preambleLen*bps, 1);
@@ -51,9 +44,6 @@ EpreS   = sum(abs(preSyms).^2);
 qamDemBits = @(z) demQPSK.demodulateHard(z);
 
 %% ---------- DSP chain ----------
-% rrcRX  = comm.RaisedCosineReceiveFilter( ...
-%     'RolloffFactor',beta,'FilterSpanInSymbols',span, ...
-%     'InputSamplesPerSymbol',sps,'DecimationFactor',1);
 rrcRX  = filters.RootRaisedCosineFilter(beta, span, sps);
 agc     = comm.AGC('AveragingLength',1000,'MaximumGain',30,'AdaptationStepSize',1e-3);
 dcblock = dsp.DCBlocker('Length',64);
@@ -121,7 +111,7 @@ while true
     if numel(yBuf) > maxHold, yBuf = yBuf(end-maxHold+1:end); end
     if numel(yBuf) < preambleLen*sps + payloadSyms*sps + 8*sps, continue; end
 
-    % ================= SYMBOL-RATE DETECTION (same logic) =================
+    % ================= SYMBOL-RATE DETECTION =================
     bestFound = false;
     best = struct('off',0,'pk',-inf,'idx',0,'PSR',0,'pow',0);
 
@@ -154,7 +144,6 @@ while true
 
     if ~bestFound, continue; end
 
-    % If you see mu~0.98 but PSR~1, you can relax PSR gating while debugging
     if ~(best.pk > MU_THR_S && best.pow > POW_THR_S && best.PSR > PSR_THR_S)
         fprintf('mu=%.2f PSR=%.2f Pow=%.2f\n', best.pk, best.PSR, best.pow);
         continue;
@@ -184,49 +173,27 @@ while true
     % ---- carrier/phase recovery at 1 sps (coarse then fine) ----
     rxSyms_eq = carSyncNow(rxSyms_raw);
 
-    % ---- Resolve ±/±j quadrant using coded hard bits vs reference coding ----
+    % ---- Resolve ±/±j quadrant using hard bits vs reference bits ----
     G = [1, -1, 1j, -1j];
     errs = zeros(1,4);
     for g = 1:4
-        rb = qamDemBits(rxSyms_eq * G(g));                      % coded hard bits
-        K  = min(numel(rb), numel(encRefBits));
-        errs(g) = mean(rb(1:K) ~= encRefBits(1:K));
+        rb = qamDemBits(rxSyms_eq * G(g));         % hard bits for this quadrant
+        K  = min(numel(rb), numel(refBits_info));
+        errs(g) = mean(rb(1:K) ~= refBits_info(1:K));
     end
     [~, ig] = min(errs);
     rxSyms = rxSyms_eq * G(ig);
 
-    % ===== Soft LLRs for Viterbi (if FEC enabled) =====
-    if useFEC
-        % Decision-directed noise variance for LLRs
-        hb  = qamDemBits(rxSyms);
-        zh  = modQPSK.modulate(hb);
-        cH  = (zh' * rxSyms) / (zh' * zh + eps);
-        eV  = rxSyms - cH * zh;
-        varComplex  = max(mean(abs(eV).^2), 1e-8);     % complex noise variance
-        noiseVarLLR = varComplex / 2;                  % per dimension
+    % ===== Hard-decision demod and BER (NO FEC) =====
+    rxBits = qamDemBits(rxSyms);
 
-        llr = demQPSK.demodulateLlr(rxSyms, noiseVarLLR);
-        % approxllr = log(P(b=1)/P(b=0)) => positive=1, negative=0
+    frameBER = mean(rxBits(1:infoBitsLen) ~= refBits_info);
+    totErr   = totErr + sum(rxBits(1:infoBitsLen) ~= refBits_info);
+    totBits  = totBits + infoBitsLen;
+    cumBER   = totErr / max(totBits,1);
 
-        reset(vitDec);
-        decBits = vitDec(llr);
-        if numel(decBits) < tb + infoBitsLen, continue; end
-        decBits = decBits(tb+1 : tb + infoBitsLen);            % drop ramp-in
-
-        frameBER = mean(decBits ~= refBits_info);
-        totErr   = totErr + sum(decBits ~= refBits_info);
-        totBits  = totBits + numel(refBits_info);
-
-        payBits = decBits;
-    else
-        rxBits = qamDemBits(rxSyms);
-        frameBER = mean(rxBits(1:infoBitsLen) ~= refBits_info);
-        totErr   = totErr + sum(rxBits(1:infoBitsLen) ~= refBits_info);
-        totBits  = totBits + infoBitsLen;
-
-        payBits = rxBits(1:infoBitsLen);
-    end
-    cumBER  = totErr / max(totBits,1);
+    % Payload bits passed to sink
+    payBits = rxBits(1:infoBitsLen);
 
     % ---- decision-directed EVM -> Es/N0 (clean SNR) ----
     hb2 = qamDemBits(rxSyms);
