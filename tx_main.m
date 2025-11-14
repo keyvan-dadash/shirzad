@@ -55,8 +55,10 @@ preBits = randi([0 1], preambleLen*bps, 1);
 preSyms = modQPSK.modulate(preBits);
 
 % Pulse shaping filter
-txRRC  = comm.RaisedCosineTransmitFilter( ...
-    'RolloffFactor',beta,'FilterSpanInSymbols',span,'OutputSamplesPerSymbol',sps);
+% txRRC  = comm.RaisedCosineTransmitFilter( ...
+%     'RolloffFactor',beta,'FilterSpanInSymbols',span,'OutputSamplesPerSymbol',sps);
+
+txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
 
 % Spectrum analyzer (optional)
 sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
@@ -77,8 +79,14 @@ while true
     paySyms = modQPSK.modulate(encBits);
 
     frmSyms = [preSyms; paySyms];
-    txWave  = txRRC(frmSyms);
-    txWave  = txWave ./ max(abs(txWave)) * 0.8;
+    % txWave  = txRRC(frmSyms);
+    % txWave  = txWave ./ max(abs(txWave)) * 0.8;
+
+    up = zeros(numel(frmSyms)*sps, 1);
+    up(1:sps:end) = frmSyms;
+
+    txWave = txRRC.process(up);
+    txWave = txWave ./ max(abs(txWave)) * 0.8;
 
     % ---- visualize + send via Sink ----
     sa(txWave);

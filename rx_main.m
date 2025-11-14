@@ -51,9 +51,10 @@ EpreS   = sum(abs(preSyms).^2);
 qamDemBits = @(z) demQPSK.demodulateHard(z);
 
 %% ---------- DSP chain ----------
-rrcRX  = comm.RaisedCosineReceiveFilter( ...
-    'RolloffFactor',beta,'FilterSpanInSymbols',span, ...
-    'InputSamplesPerSymbol',sps,'DecimationFactor',1);
+% rrcRX  = comm.RaisedCosineReceiveFilter( ...
+%     'RolloffFactor',beta,'FilterSpanInSymbols',span, ...
+%     'InputSamplesPerSymbol',sps,'DecimationFactor',1);
+rrcRX  = filters.RootRaisedCosineFilter(beta, span, sps);
 agc     = comm.AGC('AveragingLength',1000,'MaximumGain',30,'AdaptationStepSize',1e-3);
 dcblock = dsp.DCBlocker('Length',64);
 
@@ -112,7 +113,7 @@ while true
     sa(x);
 
     % Matched filter (still at sps)
-    y = rrcRX(x);
+    y = rrcRX.process(x);
 
     % Accumulate & bound buffer at sample rate
     yBuf = [yBuf; y]; %#ok<AGROW>
@@ -193,13 +194,6 @@ while true
     end
     [~, ig] = min(errs);
     rxSyms = rxSyms_eq * G(ig);
-
-    % ---- update constellation viewer ----
-    if isvalid(hRx)
-        set(hRx, 'XData', real(rxSyms), ...
-                 'YData', imag(rxSyms));
-        drawnow limitrate;
-    end
 
     % ===== Soft LLRs for Viterbi (if FEC enabled) =====
     if useFEC
