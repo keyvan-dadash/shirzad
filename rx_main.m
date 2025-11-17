@@ -7,7 +7,7 @@ assert(exist('dsp.UDPReceiver','class')==8, ...
   ['Install "DSP System Toolbox" for UDP receiver support.']);
 
 %% ---------- User/link params (MUST MATCH TX) ----------
-fc              = 10e6;     % kept for consistency (not used in UDP mode)
+fc              = 9.8e6;     % kept for consistency (not used in UDP mode)
 MasterClockRate = 100e6;   % same
 Fs              = 1e6;     % symbol-rate * sps
 Decim           = MasterClockRate/Fs;  %#ok<NASGU>  % not used in UDP mode
@@ -19,7 +19,7 @@ sps = 10; beta = 0.35; span = 10;     % keep sps=10 to match TX
 % IMPORTANT: these must match TX settings
 preambleLen = 128;            % symbols
 payloadSyms = 270;            % symbols/frame
-rxGain_dB   = 3;              %#ok<NASGU>
+rxGain_dB   = 0;              %#ok<NASGU>
 
 SamplesPerFrame = 4000;      % max UDP samples we are willing to accept
 
@@ -81,6 +81,15 @@ rfSrc = sources.UDPWaveformSource( ...
     'Blocking',             true, ...
     'TimeoutSeconds',       1.0);
 
+
+% rfSrc = sources.SDRuBasebandSource( ...
+%       'IPAddress',        '192.168.10.4', ...
+%       'CenterFrequency',  fc, ...
+%       'MasterClockRate',  MasterClockRate, ...
+%       'DecimationFactor', Decim, ...
+%       'Gain',             rxGain_dB, ...
+%       'SamplesPerFrame',  SamplesPerFrame);
+
 % Payload sink: collects decoded payload bits
 paySink = sinks.PayloadCollectorSink();
 
@@ -113,10 +122,11 @@ while true
     if ~useFine
         x = agc.process(x);
     end
-    sa(x);
 
     % Matched filter (still at sps)
     y = rrcRX.process(x);
+
+    sa(y);
 
     % Accumulate & bound buffer at sample rate
     yBuf = [yBuf; y]; %#ok<AGROW>
