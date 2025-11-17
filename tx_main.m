@@ -11,7 +11,7 @@ sps = 10; beta = 0.35; span = 10;
 
 preambleLen = 128;
 payloadSyms = 270;
-txGain_dB   = 3;
+txGain_dB   = 0;
 
 modQPSK = modulators.QpskModulator();
 
@@ -37,6 +37,14 @@ txSink = sinks.UDPWaveformSink( ...
     'RemoteIPPort',    31000, ...
     'SampleRate',      Fs);
 
+% txSink = sinks.SDRuWaveformSink( ...
+%   'IPAddress',         '192.168.10.5', ...
+%   'CenterFrequency',   fc, ...
+%   'MasterClockRate',   MasterClockRate, ...
+%   'InterpolationFactor', Interp, ...
+%   'Gain',              txGain_dB, ...
+%   'UseExternalRef',    false);
+
 sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
     'PlotAsTwoSidedSpectrum',true, ...
     'SpectrumType','Power density', ...
@@ -45,7 +53,7 @@ sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
 disp('TX: streaming frames via UDP. Ctrl+C to stop.');
 
 k = 0;
-cfoHz = 200;
+cfoHz = 1000;
 Fs    = 1e6;
 
 globalSampleIndex = 0;   % or make it persistent in a function
@@ -68,7 +76,7 @@ while true
     N = numel(txWave);
     n = (0:N-1).' + globalSampleIndex;   % global sample index for this block
     
-    % txWave = txWave .* exp(1j*2*pi*cfoHz*n/Fs);
+    txWave = txWave .* exp(1j*2*pi*cfoHz*n/Fs);
     
     globalSampleIndex = globalSampleIndex + N;
 
