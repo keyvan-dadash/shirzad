@@ -1,141 +1,138 @@
-classdef RepeatedPreambleDetector < sync.AbstractPreambleDetector
-    %REPEATEDPREAMBLEDETECTOR
+% File: +sync/RepeatedPreambleDetector.m
+classdef RepeatedPreambleDetector < handle
+    % RepeatedPreambleDetector
     %
-    % Detects a preamble of the form [a, a] where each half has
-    % PreambleHalfLen symbols.
+    % Detects a preamble of the form [a, a] at symbol-rate, given a
+    % sample-rate complex baseband stream y[n].
     %
-    % Uses a Schmidl-like metric:
-    %
-    %   P(k) = sum_{n=0}^{L-1} y[k+L+n] * conj(y[k+n])
-    %   R(k) = sum_{n=0}^{L-1} (|y[k+n]|^2 + |y[k+L+n]|^2)
+    % Uses a Schmidl-style metric:
+    %   P(k) = sum_{n=0}^{Lh-1} y_{k+n+Lh} * conj(y_{k+n})
+    %   R(k) = sum_{n=0}^{2Lh-1} |y_{k+n}|^2
     %   M(k) = |P(k)|^2 / (R(k)^2 + eps)
     %
-    % CFO estimate:
+    % It tries all sample offsets 0..SamplesPerSymbol-1, down-samples to
+    % 1-sps, and searches over k. Returns the best offset and symbol index.
     %
-    %   wSym_hat = angle(P(k0)) / L
+    % Properties (name-value in constructor):
+    %   SamplesPerSymbol : integer sps
+    %   PreambleHalfLen  : length of one half a (in symbols)
+    %   MetricThreshold  : minimum M(k) to declare Found=true
+    %   MinWindowPower   : minimum R(k) to avoid pure noise triggers
     %
-    % where k0 is the index that maximizes M(k).
+    % Method:
+    %   res = detect(y)
+    %       y : column vector of complex samples at Fs
     %
-    % Result struct:
-    %   - Found            : true/false
-    %   - SampleOffset     : best sample offset in [0..sps-1]
-    %   - PreambleStartSym : index (1-based) in symbol-rate sequence
-    %   - CfoRadPerSym     : estimated CFO (rad/symbol)
-    %   - Metric           : Mmax
-    %   - WindowPower      : R(k0)
-    %
-    % NOTE:
-    %   This detector works at *symbol rate*. It internally tries all
-    %   sps offsets on the *sample-rate* yBuf, down-samples to 1 sps, and
-    %   scans for the best M(k). It assumes the preamble is fully inside
-    %   yBuf.
+    %   res is a struct with fields:
+    %       Found            : logical
+    %       Metric           : best M(k)
+    %       WindowPower      : best R(k)
+    %       SampleOffset     : best sample offset (0..sps-1)
+    %       PreambleStartSym : best symbol index (1-based at 1 sps)
 
     properties
-        MetricThreshold   (1,1) double = 0.2    % gate on M(k)
-        MinWindowPower    (1,1) double = 1e-6   % gate on R(k)
+        SamplesPerSymbol = 10;
+        PreambleHalfLen  = 32;
+        MetricThreshold  = 0.2;
+        MinWindowPower   = 1e-6;
     end
 
     methods
         function obj = RepeatedPreambleDetector(varargin)
-            % RepeatedPreambleDetector('SamplesPerSymbol',10, ...
-            %                         'PreambleHalfLen',64, ...
-            %                         'MetricThreshold',0.2)
-            p = inputParser;
-            p.addParameter('SamplesPerSymbol', 10, @(x)isnumeric(x)&&isscalar(x));
-            p.addParameter('PreambleHalfLen',  64, @(x)isnumeric(x)&&isscalar(x));
-            p.addParameter('MetricThreshold',  0.2, @(x)isnumeric(x)&&isscalar(x));
-            p.addParameter('MinWindowPower',   1e-6, @(x)isnumeric(x)&&isscalar(x));
-            p.parse(varargin{:});
-            cfg = p.Results;
-
-            obj@sync.AbstractPreambleDetector( ...
-                'RepeatedPreambleDetector', ...
-                cfg.SamplesPerSymbol, ...
-                cfg.PreambleHalfLen);
-
-            obj.MetricThreshold = cfg.MetricThreshold;
-            obj.MinWindowPower  = cfg.MinWindowPower;
+            % Constructor with name-value pairs
+            if mod(numel(varargin),2) ~= 0
+                error('RepeatedPreambleDetector:NameValue', ...
+                      'Constructor expects name-value pairs.');
+            end
+            for k = 1:2:numel(varargin)
+                name  = varargin{k};
+                value = varargin{k+1};
+                switch lower(name)
+                    case 'samplespersymbol'
+                        obj.SamplesPerSymbol = value;
+                    case 'preamblehalflen'
+                        obj.PreambleHalfLen  = value;
+                    case 'metricthreshold'
+                        obj.MetricThreshold  = value;
+                    case 'minwindowpower'
+                        obj.MinWindowPower   = value;
+                    otherwise
+                        error('RepeatedPreambleDetector:UnknownParam', ...
+                              'Unknown parameter "%s".', name);
+                end
+            end
         end
 
-        function result = detect(obj, yBuf)
+        function res = detect(obj, y)
+            % DETECT  Run Schmidl-style repeated-preamble detection
+            %
+            % res = obj.detect(y)
+            %
+            % y : complex column vector of samples at Fs
+
             sps  = obj.SamplesPerSymbol;
-            L    = obj.PreambleHalfLen;
-            Ltot = 2*L;
+            Lh   = obj.PreambleHalfLen;
+            Lpre = 2 * Lh;
 
-            bestMetric = -inf;
-            bestOff    = 0;
-            bestK      = 0;
-            bestP      = 0;
-            bestR      = 0;
-            foundAny   = false;
+            best.Metric           = 0;
+            best.SampleOffset     = 0;
+            best.PreambleStartSym = 0;
+            best.WindowPower      = 0;
+            best.Found            = false;
 
-            N = numel(yBuf);
-            if N < Ltot * sps
-                result = obj.makeEmptyResult();
+            if isempty(y)
+                res = best;
                 return;
             end
 
-            % Try each fractional-sample offset (0..sps-1)
+            % Try all possible sample offsets 0..sps-1
             for off = 0:(sps-1)
-                ySym = yBuf(1+off : sps : end);   % symbol-rate sequence
+                ySym = y(1+off : sps : end);  % 1 sample per symbol
                 Ns   = numel(ySym);
-                if Ns < Ltot + 4
+                if Ns < Lpre + 1
                     continue;
                 end
 
-                maxK = Ns - Ltot + 1;
-                for k = 1:maxK
-                    seg1 = ySym(k       : k+L-1);
-                    seg2 = ySym(k+L     : k+2*L-1);
+                % Sliding window over possible starting symbol indices k
+                Lwin = Ns - 2*Lh;
+                if Lwin <= 0
+                    continue;
+                end
 
-                    Pk = sum(seg2 .* conj(seg1));   % complex correlation between halves
-                    Rk = sum(abs(seg1).^2 + abs(seg2).^2);
+                P = complex(zeros(Lwin,1));
+                R = zeros(Lwin,1);
 
-                    Mk = (abs(Pk)^2) / (Rk^2 + eps);
+                for k = 1:Lwin
+                    idxA = k : k+Lh-1;
+                    idxB = k+Lh : k+2*Lh-1;
 
-                    if Mk > bestMetric
-                        bestMetric = Mk;
-                        bestOff    = off;
-                        bestK      = k;
-                        bestP      = Pk;
-                        bestR      = Rk;
-                        foundAny   = true;
-                    end
+                    a = ySym(idxA);
+                    b = ySym(idxB);
+
+                    P(k) = sum(b .* conj(a));
+                    seg  = ySym(k : k+2*Lh-1);
+                    R(k) = sum(abs(seg).^2);
+                end
+
+                M = abs(P).^2 ./ (R.^2 + eps);
+
+                [Mmax, idxMax] = max(M);
+                if Mmax > best.Metric && R(idxMax) > obj.MinWindowPower
+                    best.Metric           = Mmax;
+                    best.SampleOffset     = off;
+                    best.PreambleStartSym = idxMax;  % 1-based
+                    best.WindowPower      = R(idxMax);
                 end
             end
 
-            if ~foundAny ...
-               || bestMetric < obj.MetricThreshold ...
-               || bestR < obj.MinWindowPower
-
-                result = obj.makeEmptyResult();
-                return;
+            if best.Metric > obj.MetricThreshold && ...
+               best.WindowPower > obj.MinWindowPower
+                best.Found = true;
+            else
+                best.Found = false;
             end
 
-            % CFO estimate (rad/symbol)
-            wSym_hat = angle(bestP) / L;
-
-            result = struct( ...
-                'Found',            true, ...
-                'SampleOffset',     bestOff, ...
-                'PreambleStartSym', bestK, ...
-                'CfoRadPerSym',     wSym_hat, ...
-                'Metric',           bestMetric, ...
-                'WindowPower',      bestR);
+            res = best;
         end
     end
-
-    methods (Access = private)
-        function r = makeEmptyResult(obj)
-            %#ok<INUSD>
-            r = struct( ...
-                'Found',            false, ...
-                'SampleOffset',     0, ...
-                'PreambleStartSym', 0, ...
-                'CfoRadPerSym',     0, ...
-                'Metric',           0, ...
-                'WindowPower',      0);
-        end
-    end
-
 end

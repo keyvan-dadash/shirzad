@@ -9,7 +9,7 @@ Interp          = MasterClockRate/Fs;
 M   = 4;  bps = log2(M);
 sps = 10; beta = 0.35; span = 10;
 
-preambleHalfLen = 32;           % length of *one* half
+preambleHalfLen = 64;           % length of *one* half
 preambleLen     = 2*preambleHalfLen;   % total preamble symbols
 
 payloadSyms = 270;
@@ -26,11 +26,17 @@ payloadBits_info = randi([0 1], infoBitsLen, 1);
 paySyms = modQPSK.modulate(payloadBits_info);
 
 % Preamble (uncoded, fixed)
-rng(42);
-preBitsHalf = randi([0 1], preambleHalfLen*bps, 1);
+mseqGen = training.MSequenceGenerator( ...
+    'Degree', 9);   % period = 2^9 - 1 = 511 >= preambleHalfLen * bps
+
+% We need preambleHalfLen * bps bits for ONE half (QPSK -> 2 bits/sym)
+preBitsHalf = mseqGen.generateBits(preambleHalfLen * bps);
+
+% Map bits to QPSK using your existing modulator
 preSymsHalf = modQPSK.modulate(preBitsHalf);
 
-preSyms = [preSymsHalf; preSymsHalf];   % [a, a]
+% Schmidl preamble: [a, a]
+preSyms = [preSymsHalf; preSymsHalf];
 
 %% ---------- RRC filter (STREAMING) ----------
 txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
