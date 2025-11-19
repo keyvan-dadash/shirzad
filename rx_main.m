@@ -94,7 +94,7 @@ preDet = sync.RepeatedPreambleDetector( ...
 fftCfoEst = sync.FftCfoEstimator( ...
     'SampleRateSym', Rsym, ...
     'PreambleSyms',  preSyms, ...
-    'Nfft',          4096, ...
+    'Nfft',          1024, ...
     'UseHistory',    false, ...
     'NumCandidates', 3);
 
@@ -148,8 +148,16 @@ maxHoldSam = 10*frameSam + 8*sps + span*sps;  % safety limit
 while true
     %% ---------- Pull chunk from source ----------
     [xRaw, srcInfo] = rfSrc.readFrame();
-    if ~srcInfo.IsValid || numel(xRaw) < SamplesPerFrame
-        pause(0.5);
+    if ~srcInfo.IsValid
+        pause(0.05);
+        continue;
+    end
+
+    if numel(xRaw) < SamplesPerFrame
+        xBuf    = [];
+        yDetBuf = [];
+        useFine = false;
+        agc.AdaptationStepSize = 1e-3;   % re-enable AGC adaptation
         continue;
     end
 
@@ -161,7 +169,7 @@ while true
         xAGC = xDC;
     end
 
-    sa(xAGC);
+    % sa(xAGC);
 
     %% ---------- Detection path: RRC on AGC output ----------
     yDet = rrcDet.process(xAGC);
@@ -178,7 +186,7 @@ while true
         fprintf('maxHoldSam chop: dropped %d old samples\n', extra);
     end
 
-    fprintf('size y and x: %.4f and %.4f and the input we got %.3f\n', numel(xBuf), numel(yDetBuf), numel(xRaw));
+    % fprintf('size y and x: %.4f and %.4f and the input we got %.3f\n', numel(xBuf), numel(yDetBuf), numel(xRaw));
 
     %% ---------- INNER LOOP: process as many frames as possible ----------
     while true
@@ -266,7 +274,7 @@ while true
         [~, ig] = min(errs);
         rxSyms = rxSyms_eq * G(ig);
 
-        constDiag(rxSyms);
+        % constDiag(rxSyms);
 
         %% ===== Hard-decision demod and BER (NO FEC) =====
         rxBits  = qamDemBits(rxSyms);

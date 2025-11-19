@@ -90,7 +90,7 @@ while true
     
     % globalSampleIndex = globalSampleIndex + N;
 
-    sa(txWave);
+    % sa(txWave);
     txSink.writeFrame(txWave, struct('FrameIndex', k+1));
 
     k = k+1;
