@@ -122,6 +122,8 @@ classdef RepeatedPreambleDetector < handle
                     best.SampleOffset     = off;
                     best.PreambleStartSym = idxMax;  % 1-based
                     best.WindowPower      = R(idxMax);
+
+                    % fprintf('1 is %.3f\n', M(1));
                 end
             end
 
