@@ -9,44 +9,39 @@ Interp          = MasterClockRate/Fs;
 M   = 4;  bps = log2(M);
 sps = 10; beta = 0.35; span = 10;
 
-preambleHalfLen = 64;           % length of *one* half
-preambleLen     = 2*preambleHalfLen;   % total preamble symbols
+preambleHalfLen = 64;
+preambleLen     = 2*preambleHalfLen;
 
 payloadSyms = 270;
 txGain_dB   = 0;
 
 modQPSK = modulators.QpskModulator();
 
-%% ---------- Fixed known payload (no FEC) ----------
-infoBitsLen = payloadSyms * bps;   % 270*2 = 540 bits
+%% ---------- Payload structure: pilot + {len + msg + padding} ----------
+infoBitsLen  = payloadSyms * bps;   % 270*2 = 540 bits
+pilotBitsLen = 100;                 % must match RX
+msgCapBits   = infoBitsLen - pilotBitsLen;
+msgCapBytes  = msgCapBits/8;       % should be 55 with these params
+maxMsgBytes  = msgCapBytes - 1;    % 1 byte for length => 54 bytes max
 
-% This must match RX:
+% Known pilot bits (must match RX)
 rng(1001);
-payloadBits_info = randi([0 1], infoBitsLen, 1);
-paySyms = modQPSK.modulate(payloadBits_info);
+pilotBits = randi([0 1], pilotBitsLen, 1);
 
-% Preamble (uncoded, fixed)
-mseqGen = training.MSequenceGenerator( ...
-    'Degree', 9);   % period = 2^9 - 1 = 511 >= preambleHalfLen * bps
-
-% We need preambleHalfLen * bps bits for ONE half (QPSK -> 2 bits/sym)
+%% ---------- Preamble (known at TX and RX) ----------
+mseqGen = training.MSequenceGenerator('Degree', 9);
 preBitsHalf = mseqGen.generateBits(preambleHalfLen * bps);
-
-% Map bits to QPSK using your existing modulator
 preSymsHalf = modQPSK.modulate(preBitsHalf);
-
-% Schmidl preamble: [a, a]
-preSyms = [preSymsHalf; preSymsHalf];
+preSyms     = [preSymsHalf; preSymsHalf];   % [a, a]
 
 %% ---------- RRC filter (STREAMING) ----------
 txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
 
-%% ---------- UDP sink ----------
-% txSink = sinks.UDPWaveformSink( ...
-%     'RemoteIPAddress', '127.0.0.1', ...
-%     'RemoteIPPort',    31000, ...
-%     'SampleRate',      Fs);
+%% ---------- Reader: source of messages ----------
+% This can later be swapped with a FileReader, NetworkReader, etc.
+msgReader = io.FixedMessageReader('Hello from TX via USRP!', true);
 
+%% ---------- USRP sink ----------
 txSink = sinks.SDRuWaveformSink( ...
   'IPAddress',         '192.168.10.5', ...
   'CenterFrequency',   fc, ...
@@ -55,45 +50,67 @@ txSink = sinks.SDRuWaveformSink( ...
   'Gain',              txGain_dB, ...
   'UseExternalRef',    false);
 
-sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
-    'PlotAsTwoSidedSpectrum',true, ...
-    'SpectrumType','Power density', ...
-    'Title','TX waveform spectrum');
+% sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
+%     'PlotAsTwoSidedSpectrum',true, ...
+%     'SpectrumType','Power density', ...
+%     'Title','TX waveform spectrum');
 
-disp('TX: streaming frames via UDP. Ctrl+C to stop.');
+disp('TX: streaming frames via USRP. Ctrl+C to stop.');
 
 k = 0;
-cfoHz = 1000;
-Fs    = 1e6;
-
-globalSampleIndex = 0;   % or make it persistent in a function
+globalSampleIndex = 0;  %#ok<NASGU>
 
 while true
-    % Same frame symbols every time
+    %% ---------- Get message bytes from Reader ----------
+    [msgBytes, n, eof] = msgReader.read(maxMsgBytes);
+
+    if n == 0
+        % No data (EOF or empty) -> send empty message (len = 0)
+        msgLen   = uint8(0);
+        msgBytes = uint8([]);
+    else
+        msgBytes = msgBytes(1:n);
+        msgLen   = uint8(n);  % guaranteed <= maxMsgBytes
+    end
+
+    % Fixed-size payload bytes: [len][msg][padding]
+    payloadBytes    = zeros(msgCapBytes, 1, 'uint8');
+    payloadBytes(1) = msgLen;
+    if msgLen > 0
+        payloadBytes(2:1+double(msgLen)) = msgBytes(:);
+    end
+
+    % bytes -> bits (column)
+    dataBitsMatrix = de2bi(payloadBytes, 8, 'left-msb').';
+    dataBits       = dataBitsMatrix(:);
+
+    % full info bits = [pilotBits; dataBits]
+    infoBits = [pilotBits; dataBits];   % length 540 bits
+
+    % map to QPSK symbols
+    paySyms = modQPSK.modulate(infoBits);
+
+    % full frame = [preamble; payload]
     frmSyms = [preSyms; paySyms];
 
-    % Up-sample by sps
+    % upsample & RRC
     up = zeros(numel(frmSyms)*sps, 1);
     up(1:sps:end) = frmSyms;
 
-    % IMPORTANT: use txRRC.process *inside* the loop
-    % so filter state is continuous across frames
     txWave = txRRC.process(up);
 
-    % Normalization (optional)
-    % txWave = txWave ./ max(abs(txWave)) * 0.8;
-
-    % N = numel(txWave);
-    % n = (0:N-1).' + globalSampleIndex;   % global sample index for this block
-    
-    %txWave = txWave .* exp(1j*2*pi*cfoHz*n/Fs);
-    
+    % Optional CFO injection (kept commented)
+    % N       = numel(txWave);
+    % n       = (0:N-1).' + globalSampleIndex;
+    % cfoHz   = 0;  % or 1000, etc.
+    % txWave  = txWave .* exp(1j*2*pi*cfoHz*n/Fs);
     % globalSampleIndex = globalSampleIndex + N;
 
     % sa(txWave);
-    txSink.writeFrame(txWave, struct('FrameIndex', k+1));
 
-    k = k+1;
+    txSink.writeFrame(txWave, struct('FrameIndex', k+1));
+    k = k + 1;
+
     if mod(k,50) == 0
         fprintf('TX sent %d frames...\n', k);
     end
