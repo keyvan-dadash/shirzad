@@ -1,9 +1,10 @@
-% RX over USRP/UDP: QPSK with repeated-preamble detection [a,a]
+% RX over USRP: QPSK with repeated-preamble detection [a,a]
 %   + FFT-based coarse CFO estimate (symbol-rate, from known preamble)
 %   + CFO correction at SYMBOL RATE (1 sps, post-RRC)
 %   + PLL (decision-directed) for fine carrier/phase tracking
 %   + decision-directed Es/N0 estimate
-%   + Constellation viewer (post-PLL, post-quadrant-fix)
+%   + Message decode from payload bits (no BER)
+%
 %   NO FEC (uncoded QPSK payload)
 
 clear; clc;
@@ -14,7 +15,7 @@ assert(exist('dsp.UDPReceiver','class')==8, ...
 %% ---------- User/link params (MUST MATCH TX) ----------
 fc              = 10e6;     % RX center frequency (USRP mode)
 MasterClockRate = 100e6;
-Fs              = 1e6;        % complex baseband sample rate
+Fs              = 1e6;      % complex baseband sample rate
 Decim           = MasterClockRate/Fs;  %#ok<NASGU>
 
 M   = 4;                      % QPSK
@@ -35,20 +36,23 @@ SamplesPerFrame = 4000;
 modQPSK = modulators.QpskModulator();
 demQPSK = demodulators.QpskDemodulator();
 
-%% ---------- Payload length & reference bits (NO FEC) ----------
-infoBitsLen = payloadSyms * bps;   % for QPSK: 270*2 = 540 bits
+%% ---------- Payload + pilot structure (NO FEC) ----------
+infoBitsLen  = payloadSyms * bps;   % 540 bits
+pilotBitsLen = 100;                 % must match TX
+msgCapBits   = infoBitsLen - pilotBitsLen;
+msgCapBytes  = msgCapBits/8;        % e.g., 55
+maxMsgBytes  = msgCapBytes - 1;     % e.g., 54 (for reference)
 
-% Reference bits (must match TX seed & length)
+% Known pilot bits (must match TX)
 rng(1001);
-refBits_info = randi([0 1], infoBitsLen, 1);
+pilotBits = randi([0 1], pilotBitsLen, 1); %#ok<NASGU>  % not used directly for now
 
-%% ---------- Preamble (known at RX, for CFO etc.) ----------
-mseqGen = training.MSequenceGenerator( ...
-    'Degree', 9);   % period = 2^9 - 1 = 511 >= preambleHalfLen * bps
-
+%% ---------- Preamble (known at RX, must match TX) ----------
+mseqGen = training.MSequenceGenerator('Degree', 9);
 preBitsHalf = mseqGen.generateBits(preambleHalfLen * bps);
 preSymsHalf = modQPSK.modulate(preBitsHalf);
 preSyms     = [preSymsHalf; preSymsHalf];   % [a, a]
+Lpre        = numel(preSyms);
 
 % Hard demapper
 qamDemBits = @(z) demQPSK.demodulateHard(z);
@@ -100,15 +104,12 @@ fftCfoEst = sync.FftCfoEstimator( ...
 
 % CFO tracking (in RX)
 cfoInitialized     = false;
-fCfoHz_trk         = 0;      % tracked CFO (Hz), used for symbol-rate correction
-cfoAlpha           = 0.05;   % smoothing step
-cfoMaxJumpHz       = 200;    % max CFO change per *trusted* frame
-berTrustThresh     = 0.001;  % only use CFO from frames with BER < threshold
-metricTrustThresh  = 0.24;   % only trust CFO when preamble metric is decent
+fCfoHz_trk         = 0;
+cfoAlpha           = 0.05;
+cfoMaxJumpHz       = 200;
+metricTrustThresh  = 0.24;
 
 %% ---------- Source & Sink ----------
-udpPort = 31000; %#ok<NASGU>
-
 rfSrc = sources.SDRuBasebandSource( ...
       'IPAddress',        '192.168.10.4', ...
       'CenterFrequency',  fc, ...
@@ -119,31 +120,31 @@ rfSrc = sources.SDRuBasebandSource( ...
 
 paySink = sinks.PayloadCollectorSink();
 
+%% ---------- Writer for decoded messages ----------
+msgWriter = io.ConsoleWriter();
+
 %% ---------- Spectrum analyzer ----------
-sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
-    'PlotAsTwoSidedSpectrum',true, ...
-    'SpectrumType','Power density', ...
-    'Title','RX spectrum (post DC/AGC)');
+% sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
+%     'PlotAsTwoSidedSpectrum',true, ...
+%     'SpectrumType','Power density', ...
+%     'Title','RX spectrum (post DC/AGC)');
 
 %% ---------- Constellation viewer ----------
-constDiag = comm.ConstellationDiagram( ...
-    'SamplesPerSymbol', 1, ...
-    'Name', 'RX Constellation (post-PLL, post-quadrant-fix)', ...
-    'XLimits', [-2 2], ...
-    'YLimits', [-2 2]);
+% constDiag = comm.ConstellationDiagram( ...
+%     'SamplesPerSymbol', 1, ...
+%     'Name', 'RX Constellation (post-PLL, post-quadrant-fix)', ...
+%     'XLimits', [-2 2], ...
+%     'YLimits', [-2 2]);
 
 %% ---------- Buffers & counters ----------
 disp('RX: waiting for frames…');
 xBuf    = complex([]);   % AGC’d baseband samples (before RRC)
-yDetBuf = complex([]);   % matched-filtered samples for detection (after rrcDet)
+yDetBuf = complex([]);   % matched-filtered samples (after rrcDet)
 
 frames = 0;
-totErr = 0;
-totBits = 0;
 
-Lpre       = numel(preSyms);       % = preambleLen in symbols
 frameSam   = frameSyms * sps;
-maxHoldSam = 10*frameSam + 8*sps + span*sps;  % safety limit
+maxHoldSam = 10*frameSam + 8*sps + span*sps;
 
 while true
     %% ---------- Pull chunk from source ----------
@@ -153,11 +154,17 @@ while true
         continue;
     end
 
+    % Handle short reads robustly
     if numel(xRaw) < SamplesPerFrame
+        fprintf('Short read (%d < %d), resetting RX state\n', ...
+            numel(xRaw), SamplesPerFrame);
+
         xBuf    = [];
         yDetBuf = [];
         useFine = false;
-        agc.AdaptationStepSize = 1e-3;   % re-enable AGC adaptation
+        agc.AdaptationStepSize = 1e-3;
+        cfoInitialized = false;
+        fCfoHz_trk     = 0;
         continue;
     end
 
@@ -178,121 +185,93 @@ while true
     xBuf    = [xBuf;    xAGC]; %#ok<AGROW>
     yDetBuf = [yDetBuf; yDet]; %#ok<AGROW>
 
-    % Safety: cap buffer size if detector has been failing for a while.
     if numel(xBuf) > maxHoldSam
-        extra   = numel(xBuf) - maxHoldSam;
+        extra = numel(xBuf) - maxHoldSam;
         xBuf(1:extra)    = [];
         yDetBuf(1:extra) = [];
         fprintf('maxHoldSam chop: dropped %d old samples\n', extra);
     end
 
-    % fprintf('size y and x: %.4f and %.4f and the input we got %.3f\n', numel(xBuf), numel(yDetBuf), numel(xRaw));
-
-    %% ---------- INNER LOOP: process as many frames as possible ----------
+    %% ---------- INNER LOOP ----------
     while true
-        % Need at least preamble + payload + some guard at sample rate
         if numel(xBuf) < frameSam + 8*sps
-            break;  % not enough samples yet
+            break;
         end
 
-        % ======== Repeated preamble detection (Schmidl metric) ========
-        searchSyms   = frameSyms + 10;       % search only near the beginning
+        % --- preamble detection ---
+        searchSyms   = frameSyms + 10;
         maxDetectSam = searchSyms * sps;
         yDetSearch   = yDetBuf(1 : min(numel(yDetBuf), maxDetectSam));
         detRes       = preDet.detect(yDetSearch);
 
         if ~detRes.Found
-            % No reliable Schmidl peak in the searched region yet
-            % -> wait for more samples from USRP
-            fprintf('No preamble: M=%.3f, Pow=%.3g\n', detRes.Metric, detRes.WindowPower);
+            fprintf('No preamble: M=%.3f, Pow=%.3g\n', ...
+                detRes.Metric, detRes.WindowPower);
             break;
         end
 
-        off         = detRes.SampleOffset;      % sample offset (0..sps-1)
-        preStartSym = detRes.PreambleStartSym;  % 1-based index at 1 sps
+        off         = detRes.SampleOffset;
+        preStartSym = detRes.PreambleStartSym;
 
-        %% ---------- Build symbol-rate stream from detection path ----------
-        ySymDet = yDetBuf(1+off : sps : end);   % 1 sample per symbol
+        % --- 1-sps stream ---
+        ySymDet = yDetBuf(1+off : sps : end);
         NsymDet = numel(ySymDet);
 
-        % Ensure full preamble and payload are present at 1 sps
         if preStartSym + Lpre - 1 > NsymDet
-            % Not enough 1-sps symbols yet, need more samples from USRP
             break;
         end
 
         payStartS = preStartSym + preambleLen;
         if payStartS + payloadSyms - 1 > NsymDet
-            % Not enough payload symbols yet
             break;
         end
 
-        %% === FFT-based coarse CFO estimate at symbol rate (on ySymDet) ===
-        [wSym_meas, fCfoHz_meas, cfoPeak] = fftCfoEst.estimate(ySymDet, preStartSym); %#ok<NASGU>
-
+        % --- CFO estimate ---
+        [wSym_meas, fCfoHz_meas, ~] = fftCfoEst.estimate(ySymDet, preStartSym); %#ok<NASGU>
         if cfoInitialized
             fCfoHz_use = fCfoHz_trk;
         else
-            fCfoHz_use = fCfoHz_meas;  % bootstrap
+            fCfoHz_use = fCfoHz_meas;
         end
+        wSym_use = 2*pi * fCfoHz_use / Rsym;
 
-        wSym_use = 2*pi * fCfoHz_use / Rsym;  % rad/symbol
+        % --- CFO correction at 1 sps ---
+        nSym     = (0:NsymDet-1).';
+        ySym_cfo = ySymDet .* exp(-1j * wSym_use .* nSym);
 
-        %% === CFO correction at SYMBOL RATE (1 sps) ===
-        nSym      = (0:NsymDet-1).';              % 0..NsymDet-1
-        ySym_cfo  = ySymDet .* exp(-1j * wSym_use .* nSym);
-
-        % Preamble sanity check against *known* preamble
-        preEndS  = preStartSym + preambleLen - 1;
-        candPre  = ySym_cfo(preStartSym:preEndS);
-        c        = abs(candPre' * preSyms) / (norm(candPre)*norm(preSyms) + eps);
+        % --- preamble sanity check vs known preSyms ---
+        preEndS = preStartSym + preambleLen - 1;
+        candPre = ySym_cfo(preStartSym:preEndS);
+        c       = abs(candPre' * preSyms) / (norm(candPre)*norm(preSyms) + eps);
         if c < 0.7
             fprintf('Low corr with real preamble (c=%.2f), waiting for more samples.\n', c);
-            % IMPORTANT: do NOT consume buffer here, otherwise we might
-            % discard a real frame. Just break and let more samples arrive.
             break;
         end
 
-        %% ---- Extract payload symbols from CFO-corrected 1-sps stream ----
+        % --- extract payload symbols ---
         payEndS = payStartS + payloadSyms - 1;
         if payEndS > numel(ySym_cfo)
             break;
         end
-        rxSyms_raw = ySym_cfo(payStartS : payEndS);
+        rxSyms_raw = ySym_cfo(payStartS:payEndS);
 
-        %% ---- carrier/phase recovery at 1 sps (coarse then fine) ----
+        % --- carrier/phase recovery ---
         rxSyms_eq = carSyncNow.process(rxSyms_raw);
 
-        %% ---- Resolve ±/±j quadrant using reference bits ----
+        % --- Resolve ±/±j quadrant using KNOWN pilot bits ---
         G    = [1, -1, 1j, -1j];
         errs = zeros(1,4);
         for g = 1:4
             rb = qamDemBits(rxSyms_eq * G(g));
-            K  = min(numel(rb), numel(refBits_info));
-            errs(g) = mean(rb(1:K) ~= refBits_info(1:K));
+            K  = min(numel(rb), pilotBitsLen);   % compare only pilot region
+            errs(g) = mean(rb(1:K) ~= pilotBits(1:K));
         end
         [~, ig] = min(errs);
-        rxSyms = rxSyms_eq * G(ig);
+        rxSyms = rxSyms_eq * G(ig);   % rotation-corrected symbols
 
         % constDiag(rxSyms);
 
-        %% ===== Hard-decision demod and BER (NO FEC) =====
-        rxBits  = qamDemBits(rxSyms);
-        errMask = (rxBits(1:infoBitsLen) ~= refBits_info);
-        errIdx  = find(errMask);
-
-        fprintf("preamble starts at %.2f\n", preStartSym);
-        fprintf('Error indices this frame: ');
-        disp(errIdx.');
-
-        frameBER = mean(errMask);
-        totErr   = totErr + sum(errMask);
-        totBits  = totBits + infoBitsLen;
-        cumBER   = totErr / max(totBits, 1);
-
-        payBits = rxBits(1:infoBitsLen);
-
-        %% ---- decision-directed EVM -> Es/N0 (clean SNR) ----
+        % --- Es/N0 estimate ---
         hb2 = qamDemBits(rxSyms);
         zh2 = modQPSK.modulate(hb2);
         cHd = (zh2' * rxSyms) / (zh2' * zh2 + eps);
@@ -301,19 +280,43 @@ while true
         Nv  = mean(abs(err).^2);
         SNRdB = 10*log10(max(Es/Nv, eps));
 
-        %% ---- frame count & sink write ----
         frames = frames + 1;
-        paySink.writeFrame(payBits, struct('FrameIndex',frames));
 
-        fprintf(['Frame %d | off=%d | M=%.3f | Pow=%.3g | ' ...
-                 'BER=%.3e | CUM=%.3e (%d bits) | Es/N0≈%.1f dB | ' ...
-                 'CFO_used≈%.1f Hz (%.3g rad/sym)\n'], ...
-                frames, off, detRes.Metric, detRes.WindowPower, ...
-                frameBER, cumBER, totBits, SNRdB, ...
-                fCfoHz_use, wSym_use);
+        % --- bits -> bytes -> message ---
+        rxBits = qamDemBits(rxSyms);
+        if numel(rxBits) < infoBitsLen
+            fprintf('Frame %d: not enough bits (%d < %d)\n', ...
+                frames, numel(rxBits), infoBitsLen);
+            break;
+        end
 
-        %% ---- CFO tracking update (BER- and metric-gated) ----
-        if detRes.Metric >= metricTrustThresh && frameBER <= berTrustThresh
+        dataBits = rxBits(pilotBitsLen+1 : infoBitsLen);   % drop pilot region
+        dataBitsMatrix = reshape(dataBits, 8, []).';
+        dataBytes      = uint8(bi2de(dataBitsMatrix, 'left-msb'));
+
+        msgLen = double(dataBytes(1));
+        if msgLen > numel(dataBytes)-1
+            msgLen = numel(dataBytes)-1;
+        end
+        msgBytes = dataBytes(2 : 1+msgLen);
+        msgText  = char(msgBytes).';
+
+        fprintf('Frame %d: decoded message = "%s"\n', frames, msgText);
+
+        % Use Writer abstraction
+        msgWriter.write(msgBytes);
+
+        % Optionally store only data bits
+        payBits = dataBits;
+        paySink.writeFrame(payBits, struct('FrameIndex', frames));
+
+        fprintf(['Summary: off=%d | M=%.3f | Pow=%.3g | ' ...
+                 'Es/N0≈%.1f dB | CFO_used≈%.1f Hz (%.3g rad/sym)\n'], ...
+                off, detRes.Metric, detRes.WindowPower, ...
+                SNRdB, fCfoHz_use, wSym_use);
+
+        % --- CFO tracking update ---
+        if detRes.Metric >= metricTrustThresh
             if ~cfoInitialized
                 fCfoHz_trk    = fCfoHz_meas;
                 cfoInitialized = true;
@@ -326,27 +329,19 @@ while true
             end
         end
 
-        %% ---- tighten loops & freeze AGC after a few frames ----
+        % --- tighten loops & freeze AGC after a few frames ---
         if ~useFine && frames >= 15
-            agc.AdaptationStepSize = 1e-9;  % effectively frozen
-            carSyncNow = carSyncFine;       % switch to narrow PLL
+            agc.AdaptationStepSize = 1e-9;
+            carSyncNow = carSyncFine;
             useFine    = true;
         end
 
-        %% ---- drop consumed samples from xBuf & yDetBuf ----
-        % Symbols we have fully processed: from the very first symbol
-        % up to the END of the payload for this decoded frame.
-        lastSymIdx   = payStartS + payloadSyms - 1;  % symbol-rate index
-        lastSampleIx = 1 + off + (lastSymIdx-1)*sps; % sample index
-
-        needTail_guard = 0;   % you can set a few*sps here if needed
-        end_consumed    = min(lastSampleIx + needTail_guard, numel(xBuf));
-
-        fprintf('the consume should be %.3f\n', end_consumed);
+        % --- drop consumed samples ---
+        lastSymIdx   = payStartS + payloadSyms - 1;
+        lastSampleIx = 1 + off + (lastSymIdx-1)*sps;
+        end_consumed = min(lastSampleIx, numel(xBuf));
 
         xBuf(1:end_consumed)    = [];
         yDetBuf(1:end_consumed) = [];
-
-        % Now loop again: maybe there is another whole frame already in the buffer
-    end  % inner while
-end  % outer while
+    end
+end
