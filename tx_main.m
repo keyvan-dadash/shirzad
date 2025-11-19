@@ -81,14 +81,14 @@ while true
     txWave = txRRC.process(up);
 
     % Normalization (optional)
-    txWave = txWave ./ max(abs(txWave)) * 0.8;
+    % txWave = txWave ./ max(abs(txWave)) * 0.8;
 
-    N = numel(txWave);
-    n = (0:N-1).' + globalSampleIndex;   % global sample index for this block
+    % N = numel(txWave);
+    % n = (0:N-1).' + globalSampleIndex;   % global sample index for this block
     
     %txWave = txWave .* exp(1j*2*pi*cfoHz*n/Fs);
     
-    globalSampleIndex = globalSampleIndex + N;
+    % globalSampleIndex = globalSampleIndex + N;
 
     sa(txWave);
     txSink.writeFrame(txWave, struct('FrameIndex', k+1));
