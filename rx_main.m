@@ -3,7 +3,7 @@
 %   + CFO correction at SYMBOL RATE (1 sps, post-RRC)
 %   + PLL (decision-directed) for fine carrier/phase tracking
 %   + decision-directed Es/N0 estimate
-%   + Message decode from payload bits (no BER)
+%   + Message decode using protocol.Datagram (no BER)
 %
 %   NO FEC (uncoded QPSK payload)
 
@@ -40,12 +40,15 @@ demQPSK = demodulators.QpskDemodulator();
 infoBitsLen  = payloadSyms * bps;   % 540 bits
 pilotBitsLen = 100;                 % must match TX
 msgCapBits   = infoBitsLen - pilotBitsLen;
-msgCapBytes  = msgCapBits/8;        % e.g., 55
-maxMsgBytes  = msgCapBytes - 1;     % e.g., 54 (for reference)
+msgCapBytes  = msgCapBits/8;        % 55 bytes "protocol payload"
+
+% Datagram header size (for documentation)
+hdrBytes        = double(protocol.Datagram.HEADER_BYTES);  % 8
+maxProtoPayload = msgCapBytes - hdrBytes;                  % 47 bytes
 
 % Known pilot bits (must match TX)
 rng(1001);
-pilotBits = randi([0 1], pilotBitsLen, 1); %#ok<NASGU>  % not used directly for now
+pilotBits = randi([0 1], pilotBitsLen, 1); %#ok<NASGU>
 
 %% ---------- Preamble (known at RX, must match TX) ----------
 mseqGen = training.MSequenceGenerator('Degree', 9);
@@ -123,12 +126,6 @@ paySink = sinks.PayloadCollectorSink();
 %% ---------- Writer for decoded messages ----------
 msgWriter = io.ConsoleWriter();
 
-%% ---------- Spectrum analyzer ----------
-% sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
-%     'PlotAsTwoSidedSpectrum',true, ...
-%     'SpectrumType','Power density', ...
-%     'Title','RX spectrum (post DC/AGC)');
-
 %% ---------- Constellation viewer ----------
 constDiag = comm.ConstellationDiagram( ...
     'SamplesPerSymbol', 1, ...
@@ -154,9 +151,9 @@ while true
         continue;
     end
 
-    % Handle short reads robustly
+    % Handle overrun (short reads etc.) robustly
     if srcInfo.Overrun
-        fprintf('Short read (%d < %d), resetting RX state\n', ...
+        fprintf('Overrun/short read (%d < %d), resetting RX state\n', ...
             numel(xRaw), SamplesPerFrame);
 
         xBuf    = [];
@@ -175,8 +172,6 @@ while true
     else
         xAGC = xDC;
     end
-
-    % sa(xAGC);
 
     %% ---------- Detection path: RRC on AGC output ----------
     yDet = rrcDet.process(xAGC);
@@ -263,14 +258,15 @@ while true
         errs = zeros(1,4);
         for g = 1:4
             rb = qamDemBits(rxSyms_eq * G(g));
-            K  = min(numel(rb), pilotBitsLen);   % compare only pilot region
+            K  = min(numel(rb), pilotBitsLen);
             errs(g) = mean(rb(1:K) ~= pilotBits(1:K));
         end
         [~, ig] = min(errs);
-        rxSyms = rxSyms_eq * G(ig);   % rotation-corrected symbols
+        rxSyms = rxSyms_eq * G(ig);
 
-        scale = sqrt(2) / sqrt(mean(abs(rxSyms).^2));  % target Es ~ 2 for QPSK
-        constDiag(scale * rxSyms);
+        % Constellation (scaled) just for visual sanity
+        % scale = sqrt(2) / sqrt(mean(abs(rxSyms).^2) + eps);
+        % constDiag(scale * rxSyms);
 
         % --- Es/N0 estimate ---
         hb2 = qamDemBits(rxSyms);
@@ -283,7 +279,7 @@ while true
 
         frames = frames + 1;
 
-        % --- bits -> bytes -> message ---
+        % --- bits -> bytes (protocol payload) ---
         rxBits = qamDemBits(rxSyms);
         if numel(rxBits) < infoBitsLen
             fprintf('Frame %d: not enough bits (%d < %d)\n', ...
@@ -293,21 +289,24 @@ while true
 
         dataBits = rxBits(pilotBitsLen+1 : infoBitsLen);   % drop pilot region
         dataBitsMatrix = reshape(dataBits, 8, []).';
-        dataBytes      = uint8(bi2de(dataBitsMatrix, 'left-msb'));
+        dataBytes      = uint8(bi2de(dataBitsMatrix, 'left-msb'));  % 55 bytes
 
-        msgLen = double(dataBytes(1));
-        if msgLen > numel(dataBytes)-1
-            msgLen = numel(dataBytes)-1;
+        % --- parse protocol datagram ---
+        [pkt, ok] = protocol.Datagram.fromBytes(dataBytes);
+
+        % ok = true;
+
+        if ~ok
+            warning('Frame %d: datagram checksum FAILED (seq=%d). Dropping payload.', ...
+                frames, pkt.SeqNum);
+            pkt.debugPrint();
+        else
+            msgBytes = pkt.Payload(1 : pkt.PayloadLen);
+            % deliver to Writer (ConsoleWriter prints text for you)
+            msgWriter.write(msgBytes);
         end
-        msgBytes = dataBytes(2 : 1+msgLen);
-        msgText  = char(msgBytes).';
 
-        % fprintf('Frame %d: decoded message = "%s"\n', frames, msgText);
-
-        % Use Writer abstraction
-        msgWriter.write(msgBytes);
-
-        % Optionally store only data bits
+        % Optionally store bits (even on checksum fail, if you want)
         payBits = dataBits;
         paySink.writeFrame(payBits, struct('FrameIndex', frames));
 

@@ -42,6 +42,67 @@ classdef Datagram
             obj.PayloadLen = uint8(numel(obj.Payload));
         end
 
+        function debugPrint(obj, maxPreviewBytes)
+            % Pretty-print datagram contents for debugging.
+            %
+            % maxPreviewBytes: how many payload bytes to show in ASCII preview
+            % (default 32).
+    
+            if nargin < 2
+                maxPreviewBytes = 32;
+            end
+    
+            fprintf('Datagram -----------------------------\n');
+            fprintf('  Version     : %d\n', obj.Version);
+    
+            % Flags as hex + symbolic names
+            fprintf('  Flags       : 0x%02X', obj.Flags);
+            flagNames = {};
+            if bitand(obj.Flags, protocol.Datagram.FLAG_START)
+                flagNames{end+1} = 'START'; %#ok<AGROW>
+            end
+            if bitand(obj.Flags, protocol.Datagram.FLAG_END)
+                flagNames{end+1} = 'END'; %#ok<AGROW>
+            end
+            if ~isempty(flagNames)
+                fprintf(' (%s)', strjoin(flagNames, '|'));
+            end
+            fprintf('\n');
+    
+            fprintf('  SeqNum      : %d\n', obj.SeqNum);
+            fprintf('  StreamId    : %d\n', obj.StreamId);
+            fprintf('  PayloadLen  : %d\n', obj.PayloadLen);
+            fprintf('  Checksum    : 0x%04X (%d)\n', obj.Checksum, obj.Checksum);
+    
+            % Hex dump of payload
+            payLen = double(min(obj.PayloadLen, numel(obj.Payload)));
+            fprintf('  PayloadHex  :');
+            for i = 1:payLen
+                fprintf(' %02X', obj.Payload(i));
+                if mod(i,16) == 0 && i < payLen
+                    fprintf('\n               ');
+                end
+            end
+            if payLen == 0
+                fprintf(' <empty>');
+            end
+            fprintf('\n');
+    
+            % ASCII preview
+            nPrev = min(payLen, maxPreviewBytes);
+            if nPrev > 0
+                bytes  = obj.Payload(1:nPrev);
+                ascii  = char(bytes);
+                % replace non-printables
+                mask = (bytes < 32) | (bytes > 126);
+                ascii(mask) = '.';
+                fprintf('  PayloadASCII: %s\n', ascii);
+            else
+                fprintf('  PayloadASCII: <empty>\n');
+            end
+                fprintf('-------------------------------------\n');
+            end
+
         function bytes = toBytes(obj, totalBytes)
             % Encode datagram into uint8 column vector.
             % If totalBytes is given, pad payload with zeros up to that size.
@@ -101,40 +162,47 @@ classdef Datagram
         function [obj, ok] = fromBytes(bytes)
             % Parse datagram from bytes (uint8 column).
             % Returns obj and ok (true if checksum validated).
-
+    
             if ~isa(bytes, 'uint8')
                 bytes = uint8(bytes);
             end
             bytes = bytes(:);
-
+    
             hdrLen = double(protocol.Datagram.HEADER_BYTES);
             if numel(bytes) < hdrLen
                 error('Datagram too short: %d bytes (need at least %d).', ...
                     numel(bytes), hdrLen);
             end
-
+    
             hdr = bytes(1:hdrLen);
             pay = bytes(hdrLen+1:end);
-
+    
             version    = hdr(1);
             flags      = hdr(2);
             seqNum     = bitor(uint16(hdr(3)) * 256, uint16(hdr(4)));
             streamId   = hdr(5);
             payloadLen = hdr(6);
             checksumRx = bitor(uint16(hdr(7)) * 256, uint16(hdr(8)));
-
+    
+            % Clamp payloadLen if header claims more than we actually have
             if payloadLen > numel(pay)
-                % Truncate to what's available; mark as checksum fail
                 payloadLen = uint8(numel(pay));
             end
-
-            % Verify checksum
-            tmp = bytes;
-            tmp(7) = uint8(0);
-            tmp(8) = uint8(0);
-            checksumCalc = protocol.Datagram.calcChecksum(tmp);
+    
+            % ===== Checksum only over: header-with-cksum-zeroed + *actual* payload =====
+            hdrZero          = hdr;
+            hdrZero(7)       = uint8(0);
+            hdrZero(8)       = uint8(0);
+            payEff           = pay(1:payloadLen);      % only the first PayloadLen bytes
+            bytesForChecksum = [hdrZero; payEff];
+    
+            checksumCalc = protocol.Datagram.calcChecksum(bytesForChecksum);
             ok = isequal(checksumCalc, checksumRx);
-
+    
+            fprintf('got checksum: %d and suppose checksum: %d\n', ...
+                checksumRx, checksumCalc);
+    
+            % Build object (even if ok = false, so we can debug it)
             obj = protocol.Datagram(seqNum, flags, pay(1:payloadLen), streamId);
             obj.Version  = version;
             obj.Checksum = checksumRx;
