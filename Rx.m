@@ -1,4 +1,5 @@
-% RX: QPSK/16-QAM over USRP N210 with symbol-rate preamble detection + CFO/phase pre-corr + tight PLL + cumulative BER + EVM
+% RX: QPSK/16-QAM over USRP N210 with symbol-rate preamble detection
+%     + CFO/phase pre-corr + tight PLL + FEC (rate-1/2) + decision-directed SNR
 clear; clc;
 
 assert(exist('comm.SDRuReceiver','class')==8, ...
@@ -6,31 +7,44 @@ assert(exist('comm.SDRuReceiver','class')==8, ...
    'Home > Add-Ons > Get Hardware Support Packages.']);
 
 %% ---------- User/Radio params (MUST MATCH TX) ----------
-fc              = 10e6;     % use 915e6 for SBX/WBX/UBX; 10e6 only for LFRX/LFTX
+fc              = 10e6;     % 10 MHz for LFRX/LFTX (match TX)
 MasterClockRate = 100e6;
 Fs              = 1e6;
 Decim           = MasterClockRate/Fs;  assert(round(Decim)==Decim,'Decim must be integer');
 
 M   = 4;                      % 4=QPSK, 16=16-QAM
 bps = log2(M);
-sps = 8;  beta = 0.35; span = 10;
+sps = 10; beta = 0.35; span = 10;     % <-- keep sps=10 to match TX
 
 preambleLen = 128;            % symbols
 payloadSyms = 2000;           % symbols/frame
-rxGain_dB   = 0;
+rxGain_dB   = 3;
 
 SamplesPerFrame = 32768;
 
-%% ---------- Known sequences (match TX exactly) ----------
-rng(1001); refBits = randi([0 1], payloadSyms*bps, 1);  % payload reference bits
-rng(42);   preBits = randi([0 1], preambleLen*bps, 1);  % preamble bits
+%% ---------- FEC (rate 1/2, K=7) ----------
+useFEC = true;                              % toggle on/off
+R    = 1/2;
+trel = poly2trellis(7,[171 133]);
+vitDec = comm.ViterbiDecoder( ...
+    'TrellisStructure', trel, ...
+    'InputFormat','Unquantized', ...        % LLRs: + => '1',  - => '0'
+    'TracebackDepth', 48, ...
+    'TerminationMethod','Truncated');
+tb = vitDec.TracebackDepth;
+
+% Reference *info* bits (same seed as TX) for BER display only:
+infoBitsLen = round(payloadSyms*bps*R);     % for QPSK: 2000*2*1/2 = 2000
+rng(1001); refBits_info = randi([0 1], infoBitsLen, 1);
+encRefBits  = convenc(refBits_info, trel);  % used ONLY to pick the correct quadrant
+
+%% ---------- Known preamble (match TX exactly) ----------
+rng(42); preBits = randi([0 1], preambleLen*bps, 1);
 preSyms = qammod(preBits, M, 'gray', 'InputType','bit', 'UnitAveragePower', true);
+EpreS   = sum(abs(preSyms).^2);
 
-% Demapper handle
-qamDem = @(z) qamdemod(z, M, 'gray', 'OutputType','bit', 'UnitAveragePower', true);
-
-% (small speed-up) reference constellation for EVM once
-refSymsConst = qammod(refBits, M, 'gray', 'InputType','bit', 'UnitAveragePower', true);
+% Demapper (hard bits)
+qamDemBits = @(z) qamdemod(z, M, 'gray', 'OutputType','bit', 'UnitAveragePower', true);
 
 %% ---------- DSP chain ----------
 rrcRX  = comm.RaisedCosineReceiveFilter( ...
@@ -46,8 +60,7 @@ carSyncCoarse = comm.CarrierSynchronizer( ...
 carSyncFine   = comm.CarrierSynchronizer( ...
     'Modulation','QAM','SamplesPerSymbol',1, ...
     'DampingFactor',0.707,'NormalizedLoopBandwidth',0.002);   % tighter
-carSyncNow = carSyncCoarse;
-useFine = false;
+carSyncNow = carSyncCoarse; useFine = false;
 
 %% ---------- Radio ----------
 rx = comm.SDRuReceiver('Platform','N200/N210/USRP2', ...
@@ -60,76 +73,64 @@ rx = comm.SDRuReceiver('Platform','N200/N210/USRP2', ...
     'OutputDataType','double', ...
     'TransportDataType','int16', ...
     'EnableBurstMode',false);
-try, rx.Antenna = 'RX2'; end   % change to 'TX/RX' if that’s your cable
+try, rx.Antenna = 'RX2'; end
 
 for i=1:10, step(rx); end   % warm up & flush
 
-%% ---------- Spectrum analyzer (only visual) ----------
+%% ---------- Spectrum analyzer (optional) ----------
 sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
     'PlotAsTwoSidedSpectrum',true, 'SpectrumType','Power density', ...
     'Title','RX spectrum (post DC/AGC)');
 
 %% ---------- Symbol-rate detector thresholds ----------
-MU_THR_S  = 0.75;    % normalized corr peak at 1 sps
+MU_THR_S  = 0.75;    % normalized corr peak @ 1 sps
 PSR_THR_S = 2.0;     % peak-to-sidelobe ratio
 POW_THR_S = 0.95;    % corr-window power / median
-
-EpreS = sum(abs(preSyms).^2);   % energy of symbol-rate preamble
 
 %% ---------- Receive/decode loop ----------
 disp('RX: waiting for frames…');
 yBuf   = complex([]); 
 frames = 0;
-
-% === use normal variables instead of 'persistent' (scripts can't declare persistent) ===
 totErr  = 0;
 totBits = 0;
 
 while true
-    % --- pull chunk ---
+    % Pull chunk
     [x,len] = rx(); if len==0, pause(0.005); continue; end
-
-    % front-end conditioning
     x = dcblock(x);
-    x = agc(x);
-
-    % spectrum view (cheap)
+    if ~useFine, x = agc(x); end
     sa(x);
 
-    % matched filter (still at sps)
+    % Matched filter (still at sps)
     y = rrcRX(x);
 
-    % accumulate & bound buffer at sample rate
+    % Accumulate & bound buffer at sample rate
     yBuf = [yBuf; y]; %#ok<AGROW>
     maxHold = 2*(preambleLen*sps + payloadSyms*sps) + 8*sps;
     if numel(yBuf) > maxHold, yBuf = yBuf(end-maxHold+1:end); end
     if numel(yBuf) < preambleLen*sps + payloadSyms*sps + 8*sps, continue; end
 
-    % ================= SYMBOL-RATE DETECTION =================
+    % ================= SYMBOL-RATE DETECTION (unchanged logic) =================
     bestFound = false;
     best = struct('off',0,'pk',-inf,'idx',0,'PSR',0,'pow',0);
 
     for off = 0:(sps-1)
-        % Build symbol-rate stream for this phase
         ySym = yBuf(1+off : sps : end);
         if numel(ySym) < preambleLen + payloadSyms + 8, continue; end
 
-        % Normalized correlation at symbol rate (end-aligned)
-        rS  = filter(conj(flipud(preSyms)), 1, ySym);
-        eyS = filter(ones(preambleLen,1), 1, abs(ySym).^2);
-        muS = (abs(rS).^2) ./ max(EpreS * (eyS), eps);
+        rS  = filter(conj(flipud(preSyms)), 1, ySym);               % correlation @ 1 sps
+        eyS = filter(ones(preambleLen,1), 1, abs(ySym).^2);          % window power
+        muS = (abs(rS).^2) ./ max(EpreS * (eyS), eps);               % 0..1
 
         [pkS, idxS] = max(muS);
 
-        % PSR & power gates at symbol rate
         guardS = max(4, round(0.3*preambleLen));
-        mu2S = muS; mu2S(max(1,idxS-guardS):min(end,idxS+guardS)) = 0;
+        mu2S   = muS; mu2S(max(1,idxS-guardS):min(end,idxS+guardS)) = 0;
         PSRS      = pkS / max(max(mu2S), eps);
         winPowS   = eyS(idxS) / preambleLen;
         noiseMedS = median(eyS) / preambleLen;
         powRatioS = winPowS / max(noiseMedS, eps);
 
-        % Keep best candidate across timing phases
         if pkS > best.pk
             bestFound = true;
             best.off  = off;
@@ -141,8 +142,13 @@ while true
     end
 
     if ~bestFound, continue; end
-    if ~(best.pk > MU_THR_S && best.PSR > PSR_THR_S && best.pow > POW_THR_S)
-        continue;  % not a valid preamble yet
+
+    % If you see mu~0.98 but PSR~1, temporarily relax PSR gating while debugging:
+    if ~(best.pk > MU_THR_S && best.pow > POW_THR_S && best.PSR > PSR_THR_S)
+        fprintf('mu=%.2f PSR=%.2f Pow=%.2f\n', best.pk, best.PSR, best.pow);
+        % Debug fallback (uncomment next line for quick lock): 
+        % if (best.pk > 0.90 && best.pow > 0.90), best.PSR = PSR_THR_S+1; else, continue; end
+        continue;
     end
 
     % ---- carve payload (symbol-rate indices) ----
@@ -169,42 +175,71 @@ while true
     % ---- carrier/phase recovery at 1 sps (coarse then fine after a few frames) ----
     rxSyms_eq = carSyncNow(rxSyms_raw);
 
-    % ---- IQ quadrant/polarity snap (±0/90/180/270°) ----
+    % ---- Resolve ±/±j quadrant using coded hard bits vs reference coding ----
     G = [1, -1, 1j, -1j];
     errs = zeros(1,4);
     for g = 1:4
-        rb = qamDem(rxSyms_eq * G(g));
-        errs(g) = mean(rb ~= refBits);
+        rb = qamDemBits(rxSyms_eq * G(g));                      % coded hard bits
+        K  = min(numel(rb), numel(encRefBits));
+        errs(g) = mean(rb(1:K) ~= encRefBits(1:K));
     end
-    [frameBER, ig] = min(errs);
+    [~, ig] = min(errs);
     rxSyms = rxSyms_eq * G(ig);
-    rxBits = qamDem(rxSyms);
 
-    % ---- cumulative BER & EVM-based SNR ----
-    e       = sum(rxBits ~= refBits);
-    totErr  = totErr  + e;
-    totBits = totBits + numel(refBits);
-    cumBER  = totErr / totBits;
+    % ===== Soft LLRs for Viterbi (if FEC enabled) =====
+    if useFEC
+        % Decision-directed noise variance for LLRs
+        hb  = qamDemBits(rxSyms);
+        zh  = qammod(hb, M, 'gray', 'InputType','bit', 'UnitAveragePower', true);
+        cH  = (zh' * rxSyms) / (zh' * zh + eps);
+        eV  = rxSyms - cH * zh;
+        varComplex  = max(mean(abs(eV).^2), 1e-8);     % complex noise variance
+        noiseVarLLR = varComplex / 2;                  % per dimension
 
-    evmRMS  = sqrt(mean(abs(rxSyms - refSymsConst).^2) / mean(abs(refSymsConst).^2));
-    SNRdB   = -20*log10(max(evmRMS, eps));     % ≈ Es/N0 (dB)
+        llr = qamdemod(rxSyms, M, 'gray', 'OutputType','approxllr', ...
+                       'UnitAveragePower', true, 'NoiseVariance', noiseVarLLR);
+        % approxllr = log(P(b=1)/P(b=0)) => positive=1, negative=0 (matches Viterbi 'Unquantized')
+
+        reset(vitDec);
+        decBits = vitDec(llr);
+        if numel(decBits) < tb + infoBitsLen, continue; end
+        decBits = decBits(tb+1 : tb + infoBitsLen);            % drop ramp-in
+
+        frameBER = mean(decBits ~= refBits_info);
+        totErr   = totErr + sum(decBits ~= refBits_info);
+        totBits  = totBits + numel(refBits_info);
+    else
+        rxBits = qamDemBits(rxSyms);
+        frameBER = mean(rxBits(1:infoBitsLen) ~= refBits_info);  % only for display
+        totErr   = totErr + sum(rxBits(1:infoBitsLen) ~= refBits_info);
+        totBits  = totBits + infoBitsLen;
+    end
+    cumBER  = totErr / max(totBits,1);
+
+    % ---- decision-directed EVM -> Es/N0 (clean SNR) ----
+    hb2 = qamDemBits(rxSyms);
+    zh2 = qammod(hb2, M, 'gray', 'InputType','bit', 'UnitAveragePower', true);
+    cHd = (zh2' * rxSyms) / (zh2' * zh2 + eps);
+    err = rxSyms - cHd * zh2;
+    Es  = mean(abs(cHd * zh2).^2);
+    Nv  = mean(abs(err).^2);
+    SNRdB = 10*log10(max(Es/Nv, eps));      % ≈ Es/N0 in dB
 
     frames = frames + 1;
     fprintf(['Frame %d | off=%d | mu=%.2f | PSR=%.2f | PowRatio=%.2f | ' ...
              'BER=%.3e | CUM=%.3e (%d bits) | Es/N0≈%.1f dB | CFO(rad/sym)=%.3g\n'], ...
-            frames, off, best.pk, best.PSR, best.pow, frameBER, cumBER, totBits, SNRdB, wSym);
+            frames, off, best.pk, best.PSR, best.pow, ...
+            frameBER, cumBER, totBits, SNRdB, wSym);
 
     % ---- tighten loops & freeze AGC after a few frames ----
     if ~useFine && frames >= 5
-        agc.AdaptationStepSize = 1e-9;   % must be > 0; tiny ≈ frozen (tunable)
+        agc.AdaptationStepSize = 1e-9;   % tiny > 0; ≈ frozen
         carSyncNow = carSyncFine;        % switch to narrow PLL
         useFine = true;
     end
 
     % ---- drop consumed samples from yBuf (SAMPLE-RATE indices) ----
-    % ySym = yBuf(1+off : sps : end).  Symbol index (idxS+payloadSyms) maps to:
-    % sample index = 1 + off + (idxS + payloadSyms)*sps
-    needTail_guard = 4*sps;  % small guard at sps
+    needTail_guard = 4*sps;
     end_consumed = 1 + off + (idxS + payloadSyms)*sps + needTail_guard - 1;
     end_consumed = min(end_consumed, numel(yBuf));
     yBuf = yBuf(end_consumed+1 : end);
