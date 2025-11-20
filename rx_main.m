@@ -3,9 +3,10 @@
 %   + CFO correction at SYMBOL RATE (1 sps, post-RRC)
 %   + PLL (decision-directed) for fine carrier/phase tracking
 %   + decision-directed Es/N0 estimate
-%   + Message decode using protocol.Datagram (no BER)
+%   + Convolutional FEC decode (rate 1/2, K=3, truncated)
+%   + Message decode using protocol.Datagram
 %
-%   NO FEC (uncoded QPSK payload)
+%   payloadSyms = 270 (unchanged)
 
 clear; clc;
 
@@ -13,55 +14,70 @@ assert(exist('dsp.UDPReceiver','class')==8, ...
   ['Install "DSP System Toolbox" for UDP/USRP support.']);
 
 %% ---------- User/link params (MUST MATCH TX) ----------
-fc              = 10e6;     % RX center frequency (USRP mode)
+fc              = 10e6;
 MasterClockRate = 100e6;
-Fs              = 1e6;      % complex baseband sample rate
+Fs              = 1e6;
 Decim           = MasterClockRate/Fs;  %#ok<NASGU>
 
-M   = 4;                      % QPSK
-bps = log2(M);
-sps = 10;                     % samples per symbol
-beta = 0.35;
-span = 10;                    % RRC span in symbols
+M   = 4;  bps = log2(M);
+sps = 10; beta = 0.35; span = 10;
 
-% Preamble: two identical halves [a, a]
-preambleHalfLen = 64;         % symbols per half
-preambleLen     = 2 * preambleHalfLen;   % total preamble length
-payloadSyms     = 270;        % symbols in payload
+preambleHalfLen = 64;
+preambleLen     = 2 * preambleHalfLen;
+payloadSyms     = 512;        % *** unchanged ***
 frameSyms       = preambleLen + payloadSyms;
 rxGain_dB       = 0;
 
-SamplesPerFrame = 4000;
+SamplesPerFrame = 6420;
 
 modQPSK = modulators.QpskModulator();
 demQPSK = demodulators.QpskDemodulator();
 
-%% ---------- Payload + pilot structure (NO FEC) ----------
+%% ---------- FEC decoder ----------
+dec = fec.ViterbiDecoder.rateHalf_K3();
+K   = 3;
+Kminus1 = K - 1;
+
+%% ---------- Payload + FEC + protocol structure ----------
 infoBitsLen  = payloadSyms * bps;   % 540 bits
 pilotBitsLen = 100;                 % must match TX
-msgCapBits   = infoBitsLen - pilotBitsLen;
-msgCapBytes  = msgCapBits/8;        % 55 bytes "protocol payload"
 
-% Datagram header size (for documentation)
-hdrBytes        = double(protocol.Datagram.HEADER_BYTES);  % 8
-maxProtoPayload = msgCapBytes - hdrBytes;                  % 47 bytes
+msgCapBytes    = 40;                                   % total datagram bytes
+hdrBytes       = double(protocol.Datagram.HEADER_BYTES); % 8
+maxProtoPayload = msgCapBytes - hdrBytes;              % 19 bytes
 
-% Known pilot bits (must match TX)
+databitsLen   = 8 * msgCapBytes;   % 216 datagram bits
+L_in          = databitsLen + Kminus1;   % 218
+codedBitsLen  = 2 * L_in;               % 436
+bitsAfterPilot = infoBitsLen - pilotBitsLen;  % 440
+padBitsLen    = bitsAfterPilot - codedBitsLen; % 4
+
+if padBitsLen < 0
+    error('RX: FEC layout invalid (padBitsLen < 0).');
+end
+
 rng(1001);
-pilotBits = randi([0 1], pilotBitsLen, 1); %#ok<NASGU>
+pilotBits = randi([0 1], pilotBitsLen, 1);
+
+fprintf('RX protocol+FEC:\n');
+fprintf('  datagram bytes  : %d (header=%d, payload<=%d)\n', ...
+    msgCapBytes, hdrBytes, maxProtoPayload);
+fprintf('  databitsLen     : %d bits\n', databitsLen);
+fprintf('  L_in (into enc) : %d bits\n', L_in);
+fprintf('  codedBitsLen    : %d bits, padBits=%d\n', codedBitsLen, padBitsLen);
 
 %% ---------- Preamble (known at RX, must match TX) ----------
 mseqGen = training.MSequenceGenerator('Degree', 9);
 preBitsHalf = mseqGen.generateBits(preambleHalfLen * bps);
 preSymsHalf = modQPSK.modulate(preBitsHalf);
-preSyms     = [preSymsHalf; preSymsHalf];   % [a, a]
+preSyms     = [preSymsHalf; preSymsHalf];
 Lpre        = numel(preSyms);
 
 % Hard demapper
 qamDemBits = @(z) demQPSK.demodulateHard(z);
 
 % Symbol rate
-Rsym = Fs / sps;  % 1e6 / 10 = 100 ksym/s
+Rsym = Fs / sps;
 
 %% ---------- DSP chain (detection path) ----------
 rrcDet = filters.RootRaisedCosineFilter(beta, span, sps);
@@ -74,7 +90,6 @@ agc = gain.SimpleAgc( ...
 
 dcblock = filters.DcBlocker('Length',64);
 
-% Carrier sync (decision-directed PLL) at 1 sps (data path)
 carSyncCoarse = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
@@ -85,19 +100,19 @@ carSyncFine = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
     'DampingFactor',          0.707, ...
-    'NormalizedLoopBandwidth',0.002);
+    'NormalizedLoopBandwidth',0.005);
 
 carSyncNow = carSyncCoarse;
 useFine    = false;
 
-%% ---------- Repeated preamble detector (Schmidl-style) ----------
+%% ---------- Repeated preamble detector ----------
 preDet = sync.RepeatedPreambleDetector( ...
     'SamplesPerSymbol', sps, ...
     'PreambleHalfLen',  preambleHalfLen, ...
     'MetricThreshold',  0.2, ...
     'MinWindowPower',   1e-7);
 
-%% ---------- FFT-based coarse CFO estimator (symbol-rate) ----------
+%% ---------- FFT-based coarse CFO estimator ----------
 fftCfoEst = sync.FftCfoEstimator( ...
     'SampleRateSym', Rsym, ...
     'PreambleSyms',  preSyms, ...
@@ -105,7 +120,6 @@ fftCfoEst = sync.FftCfoEstimator( ...
     'UseHistory',    false, ...
     'NumCandidates', 3);
 
-% CFO tracking (in RX)
 cfoInitialized     = false;
 fCfoHz_trk         = 0;
 cfoAlpha           = 0.05;
@@ -122,11 +136,8 @@ rfSrc = sources.SDRuBasebandSource( ...
       'SamplesPerFrame',  SamplesPerFrame);
 
 paySink = sinks.PayloadCollectorSink();
-
-%% ---------- Writer for decoded messages ----------
 msgWriter = io.ConsoleWriter();
 
-%% ---------- Constellation viewer ----------
 constDiag = comm.ConstellationDiagram( ...
     'SamplesPerSymbol', 1, ...
     'Name', 'RX Constellation (post-PLL, post-quadrant-fix)', ...
@@ -135,8 +146,8 @@ constDiag = comm.ConstellationDiagram( ...
 
 %% ---------- Buffers & counters ----------
 disp('RX: waiting for frames…');
-xBuf    = complex([]);   % AGC’d baseband samples (before RRC)
-yDetBuf = complex([]);   % matched-filtered samples (after rrcDet)
+xBuf    = complex([]);
+yDetBuf = complex([]);
 
 frames = 0;
 
@@ -151,7 +162,6 @@ while true
         continue;
     end
 
-    % Handle overrun (short reads etc.) robustly
     if srcInfo.Overrun
         fprintf('Overrun/short read (%d < %d), resetting RX state\n', ...
             numel(xRaw), SamplesPerFrame);
@@ -173,10 +183,9 @@ while true
         xAGC = xDC;
     end
 
-    %% ---------- Detection path: RRC on AGC output ----------
+    %% ---------- Detection path ----------
     yDet = rrcDet.process(xAGC);
 
-    %% ---------- Append to buffers ----------
     xBuf    = [xBuf;    xAGC]; %#ok<AGROW>
     yDetBuf = [yDetBuf; yDet]; %#ok<AGROW>
 
@@ -193,7 +202,6 @@ while true
             break;
         end
 
-        % --- preamble detection ---
         searchSyms   = frameSyms + 10;
         maxDetectSam = searchSyms * sps;
         yDetSearch   = yDetBuf(1 : min(numel(yDetBuf), maxDetectSam));
@@ -208,7 +216,6 @@ while true
         off         = detRes.SampleOffset;
         preStartSym = detRes.PreambleStartSym;
 
-        % --- 1-sps stream ---
         ySymDet = yDetBuf(1+off : sps : end);
         NsymDet = numel(ySymDet);
 
@@ -221,7 +228,7 @@ while true
             break;
         end
 
-        % --- CFO estimate ---
+        %% ---------- CFO estimate ----------
         [wSym_meas, fCfoHz_meas, ~] = fftCfoEst.estimate(ySymDet, preStartSym); %#ok<NASGU>
         if cfoInitialized
             fCfoHz_use = fCfoHz_trk;
@@ -230,11 +237,9 @@ while true
         end
         wSym_use = 2*pi * fCfoHz_use / Rsym;
 
-        % --- CFO correction at 1 sps ---
         nSym     = (0:NsymDet-1).';
         ySym_cfo = ySymDet .* exp(-1j * wSym_use .* nSym);
 
-        % --- preamble sanity check vs known preSyms ---
         preEndS = preStartSym + preambleLen - 1;
         candPre = ySym_cfo(preStartSym:preEndS);
         c       = abs(candPre' * preSyms) / (norm(candPre)*norm(preSyms) + eps);
@@ -243,32 +248,29 @@ while true
             break;
         end
 
-        % --- extract payload symbols ---
+        %% ---------- extract payload symbols ----------
         payEndS = payStartS + payloadSyms - 1;
         if payEndS > numel(ySym_cfo)
             break;
         end
         rxSyms_raw = ySym_cfo(payStartS:payEndS);
 
-        % --- carrier/phase recovery ---
+        %% ---------- carrier/phase recovery ----------
         rxSyms_eq = carSyncNow.process(rxSyms_raw);
 
-        % --- Resolve ±/±j quadrant using KNOWN pilot bits ---
         G    = [1, -1, 1j, -1j];
         errs = zeros(1,4);
         for g = 1:4
             rb = qamDemBits(rxSyms_eq * G(g));
-            K  = min(numel(rb), pilotBitsLen);
-            errs(g) = mean(rb(1:K) ~= pilotBits(1:K));
+            Kc = min(numel(rb), pilotBitsLen);
+            errs(g) = mean(rb(1:Kc) ~= pilotBits(1:Kc));
         end
         [~, ig] = min(errs);
         rxSyms = rxSyms_eq * G(ig);
 
-        % Constellation (scaled) just for visual sanity
-        % scale = sqrt(2) / sqrt(mean(abs(rxSyms).^2) + eps);
-        % constDiag(scale * rxSyms);
+        constDiag(rxSyms);
 
-        % --- Es/N0 estimate ---
+        %% ---------- Es/N0 estimate ----------
         hb2 = qamDemBits(rxSyms);
         zh2 = modQPSK.modulate(hb2);
         cHd = (zh2' * rxSyms) / (zh2' * zh2 + eps);
@@ -279,7 +281,7 @@ while true
 
         frames = frames + 1;
 
-        % --- bits -> bytes (protocol payload) ---
+        %% ---------- bits -> FEC decode -> datagram bytes ----------
         rxBits = qamDemBits(rxSyms);
         if numel(rxBits) < infoBitsLen
             fprintf('Frame %d: not enough bits (%d < %d)\n', ...
@@ -287,14 +289,32 @@ while true
             break;
         end
 
-        dataBits = rxBits(pilotBitsLen+1 : infoBitsLen);   % drop pilot region
+        % [pilot | codedBits(436) | padBits(4)]
+        codedBits = rxBits(pilotBitsLen+1 : pilotBitsLen+codedBitsLen);
+        if numel(codedBits) < codedBitsLen
+            fprintf('Frame %d: not enough coded bits (%d < %d)\n', ...
+                frames, numel(codedBits), codedBitsLen);
+            break;
+        end
+
+        uBits_hat = dec.decode(logical(codedBits));
+        uBits_hat = double(uBits_hat(:));
+
+        if numel(uBits_hat) < databitsLen
+            warning('Frame %d: decoded bits %d < required data bits %d', ...
+                frames, numel(uBits_hat), databitsLen);
+            break;
+        end
+
+        % For truncated decoding with dummy bits at the start,
+        % the 216 output bits correspond to the original datagram bits.
+        dataBits = uBits_hat(1:databitsLen);
+
         dataBitsMatrix = reshape(dataBits, 8, []).';
-        dataBytes      = uint8(bi2de(dataBitsMatrix, 'left-msb'));  % 55 bytes
+        dataBytes      = uint8(bi2de(dataBitsMatrix, 'left-msb'));  % 27 bytes
 
-        % --- parse protocol datagram ---
+        %% ---------- parse protocol datagram ----------
         [pkt, ok] = protocol.Datagram.fromBytes(dataBytes);
-
-        % ok = true;
 
         if ~ok
             warning('Frame %d: datagram checksum FAILED (seq=%d). Dropping payload.', ...
@@ -302,11 +322,9 @@ while true
             pkt.debugPrint();
         else
             msgBytes = pkt.Payload(1 : pkt.PayloadLen);
-            % deliver to Writer (ConsoleWriter prints text for you)
             msgWriter.write(msgBytes);
         end
 
-        % Optionally store bits (even on checksum fail, if you want)
         payBits = dataBits;
         paySink.writeFrame(payBits, struct('FrameIndex', frames));
 
@@ -315,7 +333,7 @@ while true
                 off, detRes.Metric, detRes.WindowPower, ...
                 SNRdB, fCfoHz_use, wSym_use);
 
-        % --- CFO tracking update ---
+        %% ---------- CFO tracking update ----------
         if detRes.Metric >= metricTrustThresh
             if ~cfoInitialized
                 fCfoHz_trk    = fCfoHz_meas;
@@ -329,14 +347,14 @@ while true
             end
         end
 
-        % --- tighten loops & freeze AGC after a few frames ---
+        %% ---------- tighten loops & freeze AGC ----------
         if ~useFine && frames >= 15
             agc.AdaptationStepSize = 1e-9;
             carSyncNow = carSyncFine;
             useFine    = true;
         end
 
-        % --- drop consumed samples ---
+        %% ---------- drop consumed samples ----------
         lastSymIdx   = payStartS + payloadSyms - 1;
         lastSampleIx = 1 + off + (lastSymIdx-1)*sps;
         end_consumed = min(lastSampleIx, numel(xBuf));
