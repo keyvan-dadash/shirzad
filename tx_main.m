@@ -12,30 +12,52 @@ sps = 10; beta = 0.35; span = 10;
 preambleHalfLen = 64;
 preambleLen     = 2*preambleHalfLen;
 
-payloadSyms = 270;
+payloadSyms = 512;          % *** unchanged ***
 txGain_dB   = 0;
 
 modQPSK = modulators.QpskModulator();
 
-%% ---------- Payload structure: pilot + protocol.Datagram ----------
-infoBitsLen  = payloadSyms * bps;   % 270*2 = 540 bits
+%% ---------- FEC encoder (rate 1/2, K=3, TERMINATED) ----------
+enc = fec.ConvEncoder.rateHalf_K3();
+K   = 3;
+Kminus1 = K - 1;
+
+%% ---------- Payload structure: pilot + FEC-coded protocol.Datagram ----------
+infoBitsLen  = payloadSyms * bps;   % 512*2 = 1024 bits
 pilotBitsLen = 100;                 % must match RX
 
-msgCapBits   = infoBitsLen - pilotBitsLen;   % bits for protocol datagram
-assert(mod(msgCapBits,8)==0, 'msgCapBits must be a multiple of 8.');
-msgCapBytes  = msgCapBits/8;                 % should be 55 with these params
+% Fixed datagram size
+msgCapBytes    = 40;                                   % total datagram bytes
+hdrBytes       = double(protocol.Datagram.HEADER_BYTES); % 8
+maxProtoPayload = msgCapBytes - hdrBytes;              % 32 payload bytes
 
-% Datagram header is 8 bytes -> protocol payload = 55 - 8 = 47 bytes
-hdrBytes        = double(protocol.Datagram.HEADER_BYTES);  % 8
-maxProtoPayload = msgCapBytes - hdrBytes;                  % 47 bytes
-maxMsgBytes     = maxProtoPayload;                         % what Reader sees
+databitsLen   = 8 * msgCapBytes;   % 40*8 = 320 datagram bits
 
-fprintf('TX protocol: %d header bytes, %d payload bytes, total %d bytes\n', ...
-    hdrBytes, maxProtoPayload, msgCapBytes);
+% TERMINATED code:
+%  - Encoder input: databitsLen info bits
+%  - Encoder appends K-1 tail zeros internally
+%  - Total time-steps T = databitsLen + (K-1)
+%  - Coded bits = 2*T
+L_in          = databitsLen + Kminus1;   % T = 320 + 2 = 322
+codedBitsLen  = 2 * L_in;               % 644 bits
+
+bitsAfterPilot = infoBitsLen - pilotBitsLen;  % 1024 - 100 = 924
+padBitsLen    = bitsAfterPilot - codedBitsLen;  % 924 - 644 = 280
+
+if padBitsLen < 0
+    error('TX: FEC layout invalid (padBitsLen < 0).');
+end
+
+fprintf('TX protocol+FEC:\n');
+fprintf('  datagram bytes  : %d (header=%d, payload<=%d)\n', ...
+    msgCapBytes, hdrBytes, maxProtoPayload);
+fprintf('  databitsLen     : %d bits\n', databitsLen);
+fprintf('  T = L_in        : %d time steps\n', L_in);
+fprintf('  codedBitsLen    : %d bits, padBits=%d\n', codedBitsLen, padBitsLen);
 
 %% ---------- Known pilot bits (must match RX) ----------
 rng(1001);
-pilotBits = randi([0 1], pilotBitsLen, 1);
+pilotBits = randi([0 1], pilotBitsLen, 1);   % double 0/1
 
 %% ---------- Preamble (known at TX and RX) ----------
 mseqGen = training.MSequenceGenerator('Degree', 9);
@@ -47,30 +69,28 @@ preSyms     = [preSymsHalf; preSymsHalf];   % [a, a]
 txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
 
 %% ---------- Reader: source of messages ----------
-% This can later be swapped with a FileReader, etc.
 msgReader = io.FixedMessageReader('Hello from TX via USRP!', true);
 
 %% ---------- USRP sink ----------
 txSink = sinks.SDRuWaveformSink( ...
-  'IPAddress',         '192.168.10.5', ...
-  'CenterFrequency',   fc, ...
-  'MasterClockRate',   MasterClockRate, ...
+  'IPAddress',           '192.168.10.5', ...
+  'CenterFrequency',     fc, ...
+  'MasterClockRate',     MasterClockRate, ...
   'InterpolationFactor', Interp, ...
-  'Gain',              txGain_dB, ...
-  'UseExternalRef',    false);
+  'Gain',                txGain_dB, ...
+  'UseExternalRef',      false);
 
 disp('TX: streaming frames via USRP. Ctrl+C to stop.');
 
 k = 0;
-seqNum = uint16(0);        % protocol sequence number
+seqNum = uint16(0);
 globalSampleIndex = 0; %#ok<NASGU>
 
 while true
     %% ---------- Get message bytes from Reader ----------
-    [msgBytes, n, eof] = msgReader.read(maxMsgBytes); %#ok<NASGU>
+    [msgBytes, n, eof] = msgReader.read(maxProtoPayload); %#ok<NASGU>
 
     if n == 0
-        % No data (EOF or empty) -> send empty datagram
         payload = uint8([]);
     else
         payload = uint8(msgBytes(1:n));
@@ -81,23 +101,31 @@ while true
 
     %% ---------- Build protocol datagram ----------
     dgram = protocol.Datagram(seqNum, flags, payload, uint8(0));
-    % increment seqNum as uint16 (wraps naturally at 65535 -> 0)
     seqNum = seqNum + uint16(1);
 
-    %% ---------- Encode into fixed-size protocol payload (55 bytes) ----------
-    protoBytes = dgram.toBytes(msgCapBytes);   % always 55 bytes
-
-    % Sanity (optional)
-    % if numel(protoBytes) ~= msgCapBytes
-    %     error('protoBytes length %d != %d', numel(protoBytes), msgCapBytes);
-    % end
+    %% ---------- Encode into fixed-size datagram (27 bytes) ----------
+    protoBytes = dgram.toBytes(msgCapBytes);   % always 27 bytes
 
     %% ---------- bytes -> bits (column) ----------
     dataBitsMatrix = de2bi(protoBytes, 8, 'left-msb').';
-    dataBits       = dataBitsMatrix(:);   % 55 * 8 = 440 bits
+    dataBits       = dataBitsMatrix(:);       % 216 bits, double 0/1
 
-    %% ---------- full info bits = [pilotBits; protocol bytes] ----------
-    infoBits = [pilotBits; dataBits];     % 100 + 440 = 540 bits
+    %% ---------- FEC encode (TERMINATED) ----------
+    % uBits: ONLY the 216 datagram bits.
+    % ConvEncoder.encode(..., true) appends K-1 tail zeros internally.
+    uBits = logical(dataBits);             % length = 216
+
+    codedBits = enc.encode(uBits, true);   % length = 2*(216+2) = 436
+    codedBits = double(codedBits(:));      % column
+
+    if numel(codedBits) ~= codedBitsLen
+        warning('TX: codedBits length %d != expected %d', ...
+            numel(codedBits), codedBitsLen);
+    end
+
+    %% ---------- Full info bits = [pilotBits; codedBits; padBits] ----------
+    padBits = zeros(padBitsLen,1);         % 4 zero bits
+    infoBits = [pilotBits; codedBits; padBits];  % 100+436+4 = 540
 
     %% ---------- map to QPSK symbols ----------
     paySyms = modQPSK.modulate(infoBits);
