@@ -98,11 +98,12 @@ while true
     up(1:sps:end) = frmSyms;
 
     txWave = txRRC.process(up);
+    txWave = txWave ./ max(abs(txWave)) * 0.8;
 
     % Optional CFO injection (kept commented)
     % N       = numel(txWave);
     % n       = (0:N-1).' + globalSampleIndex;
-    % cfoHz   = 0;  % or 1000, etc.
+    % cfoHz   = 1000;  % or 1000, etc.
     % txWave  = txWave .* exp(1j*2*pi*cfoHz*n/Fs);
     % globalSampleIndex = globalSampleIndex + N;
 
