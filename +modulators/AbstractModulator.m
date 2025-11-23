@@ -1,17 +1,8 @@
 classdef (Abstract) AbstractModulator < handle
-    %ABSTRACTMODULATOR Base class for digital modulators.
-    %
-    %   - M              : constellation order (e.g., 4 for QPSK)
-    %   - BitsPerSymbol  : log2(M)
-    %   - Name           : optional human-readable name
-    %
-    %   Subclasses must implement:
-    %       symbols = modulate(obj, bits);
-    %
-    %   where:
-    %       bits    : column vector of 0/1 (double or logical)
-    %       symbols : column vector of complex baseband symbols
-
+    % Base class for digital modulators.
+    %   - M: The level of this modulator
+    %   - BitPerSymbol: how much this modulator transfers bits per symbol
+    %   - Name: the name of this modulator
     properties (SetAccess = protected)
         M
         BitsPerSymbol
@@ -20,17 +11,9 @@ classdef (Abstract) AbstractModulator < handle
 
     methods
         function obj = AbstractModulator(M, name)
-            if nargin < 1
-                error('AbstractModulator:MissingM', ...
-                      'Constellation order M must be specified.');
-            end
             obj.M = M;
             obj.BitsPerSymbol = log2(M);
-            if nargin >= 2
-                obj.Name = char(name);
-            else
-                obj.Name = sprintf('M=%d Modulator', M);
-            end
+            obj.Name = char(name);
         end
     end
 
