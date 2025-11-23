@@ -1,5 +1,5 @@
 classdef DcBlocker < handle
-    %DCBLOCKER Simple DC blocker using exponential running-average subtraction.
+    %Simple DC blocker using exponential running-average subtraction.
     %
     %   y = obj.process(x) removes (slow) DC offset from x by tracking
     %   a smoothed mean and subtracting it:

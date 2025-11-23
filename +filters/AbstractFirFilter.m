@@ -1,10 +1,9 @@
 classdef (Abstract) AbstractFirFilter < handle
-    %ABSTRACTFIRFILTER Base class for streaming FIR filters.
-    %
-    %   - Coefficients : row vector of FIR taps
-    %   - State        : filter state (for streaming)
-    %   - Name         : descriptive name
-
+    % AbstractFirFilter represents the general API of FIR filters in
+    % shirzad. The abstract class has three important attributes:
+    %   - Coefficients: FIR taps
+    %   - State: holding filter state for future use
+    %   - Name: name of the filter such as root raised cosine
     properties (SetAccess = protected)
         Coefficients   % 1xN double
         State          % (N-1)x1 double
@@ -13,23 +12,13 @@ classdef (Abstract) AbstractFirFilter < handle
 
     methods
         function obj = AbstractFirFilter(b, name)
-            if nargin < 1 || isempty(b)
-                error('AbstractFirFilter:MissingCoeffs', ...
-                      'Filter coefficients must be provided.');
-            end
             b = b(:).';                    % ensure row vector
             obj.Coefficients = b;
             obj.State        = zeros(numel(b)-1,1);
-
-            if nargin >= 2
-                obj.Name = char(name);
-            else
-                obj.Name = 'FIR Filter';
-            end
+            obj.Name = name;
         end
 
         function reset(obj)
-            %RESET Clear the filter state.
             obj.State(:) = 0;
         end
 
