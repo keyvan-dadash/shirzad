@@ -1,4 +1,3 @@
-% File: +sync/FftCfoEstimator.m
 classdef FftCfoEstimator < handle
     % FftCfoEstimator
     %

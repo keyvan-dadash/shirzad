@@ -1,34 +1,20 @@
-% File: +sync/RepeatedPreambleDetector.m
 classdef RepeatedPreambleDetector < handle
-    % RepeatedPreambleDetector
+    % RepeatedPreambleDetector is a preamble detector that implements
+    % Schmidl & Cox technique. This technique forms a preamble that has two
+    % repeated preamble: [a, a].
     %
-    % Detects a preamble of the form [a, a] at symbol-rate, given a
-    % sample-rate complex baseband stream y[n].
+    % Base on the M(k), we can detect the preamble of a frame. Before that,
+    % we need to calculate P(d) which is:
+    %   P(d) = r[d + m]*r[d + m + L] (from m = 0 until m = L - 1)
+    % Also we need to calculate the energy of received signal on that
+    % window, which is:
+    %   R(d) = |r[d + m + K]| ^ 2 (from m = 0 until m = L - 1)
     %
-    % Uses a Schmidl-style metric:
-    %   P(k) = sum_{n=0}^{Lh-1} y_{k+n+Lh} * conj(y_{k+n})
-    %   R(k) = sum_{n=0}^{2Lh-1} |y_{k+n}|^2
-    %   M(k) = |P(k)|^2 / (R(k)^2 + eps)
+    % Therefore, M(d) is:
+    %   M(d) = |P(d)| ^ 2 / R(d) ^ 2
     %
-    % It tries all sample offsets 0..SamplesPerSymbol-1, down-samples to
-    % 1-sps, and searches over k. Returns the best offset and symbol index.
-    %
-    % Properties (name-value in constructor):
-    %   SamplesPerSymbol : integer sps
-    %   PreambleHalfLen  : length of one half a (in symbols)
-    %   MetricThreshold  : minimum M(k) to declare Found=true
-    %   MinWindowPower   : minimum R(k) to avoid pure noise triggers
-    %
-    % Method:
-    %   res = detect(y)
-    %       y : column vector of complex samples at Fs
-    %
-    %   res is a struct with fields:
-    %       Found            : logical
-    %       Metric           : best M(k)
-    %       WindowPower      : best R(k)
-    %       SampleOffset     : best sample offset (0..sps-1)
-    %       PreambleStartSym : best symbol index (1-based at 1 sps)
+    % Based on our calculation M(d) in this project is aournd 0.25 (and
+    % also other projects)
 
     properties
         SamplesPerSymbol = 10;
@@ -64,12 +50,6 @@ classdef RepeatedPreambleDetector < handle
         end
 
         function res = detect(obj, y)
-            % DETECT  Run Schmidl-style repeated-preamble detection
-            %
-            % res = obj.detect(y)
-            %
-            % y : complex column vector of samples at Fs
-
             sps  = obj.SamplesPerSymbol;
             Lh   = obj.PreambleHalfLen;
             Lpre = 2 * Lh;
@@ -85,15 +65,15 @@ classdef RepeatedPreambleDetector < handle
                 return;
             end
 
-            % Try all possible sample offsets 0..sps-1
+            % For all different sample offset
             for off = 0:(sps-1)
-                ySym = y(1+off : sps : end);  % 1 sample per symbol
+                ySym = y(1+off : sps : end);
                 Ns   = numel(ySym);
                 if Ns < Lpre + 1
                     continue;
                 end
 
-                % Sliding window over possible starting symbol indices k
+                % The window that we can slide our detection on
                 Lwin = Ns - 2*Lh;
                 if Lwin <= 0
                     continue;
@@ -122,8 +102,6 @@ classdef RepeatedPreambleDetector < handle
                     best.SampleOffset     = off;
                     best.PreambleStartSym = idxMax;  % 1-based
                     best.WindowPower      = R(idxMax);
-
-                    % fprintf('1 is %.3f\n', M(1));
                 end
             end
 
