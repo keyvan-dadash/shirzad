@@ -1,68 +1,24 @@
 classdef FftCfoEstimator < handle
-    % FftCfoEstimator
-    %
-    % Estimate carrier frequency offset (CFO) from a known preamble at
-    % SYMBOL RATE using an FFT-based approach, with optional temporal
-    % smoothing / tracking to avoid large spurious jumps.
-    %
-    % Idea:
-    %   r[n] = s[n] * exp(j*wSym*n) + noise
-    %   s[n] : known preamble symbols
-    %   r[n] : received preamble symbols (at 1 sps)
-    %
-    % Form:
-    %   z[n] = r[n] * conj(s[n]) ≈ A * exp(j*wSym*n)
-    %
-    % Take FFT of z[n] (zero-padded to Nfft), find a small set of
-    % candidate peaks. Then, if history is enabled, choose the candidate
-    % whose frequency is closest to the historical CFO (and limit the
-    % allowed jump between frames).
-    %
-    % Properties (name-value in constructor):
-    %   SampleRateSym : symbol rate (Rsym) in Hz
-    %   PreambleSyms  : known preamble symbols s[n] (column vector)
-    %   Nfft          : FFT length (power of two recommended)
-    %
-    %   UseHistory    : if true, track CFO over frames and avoid
-    %                   large jumps. Default: false (stateless usage)
-    %   NumCandidates : how many top FFT peaks to consider (>=1)
-    %                   Default: 3
-    %   Alpha         : smoothing factor for CFO in Hz
-    %                   f_out = (1-Alpha)*f_prev + Alpha*f_inst
-    %                   Default: 0.3
-    %   MaxJumpHz     : max allowed CFO change (Hz) between frames
-    %                   (before smoothing). Default: 2e3
-    %
-    % Methods:
-    %   [wSym, fCfoHz, peakVal] = estimate(ySym, preStartSym)
-    %   resetHistory()
-    %
-    %   ySym        : full 1-sps symbol stream
-    %   preStartSym : 1-based index of the first preamble symbol in ySym
-    %
-    %   wSym    : CFO in rad/symbol
-    %   fCfoHz  : CFO in Hz
-    %   peakVal : magnitude of the chosen FFT peak
+    % FftCfoEstimator uses known preamble and FFT to estimate the CFO
 
     properties
-        SampleRateSym = 1e5;   % Rsym
-        PreambleSyms  = [];    % known preamble symbols
-        Nfft          = 1024;  % FFT length
+        SampleRateSym = 1e5;
+        PreambleSyms  = [];
+        Nfft          = 1024;
 
-        UseHistory    = false; % default: stateless
-        NumCandidates = 3;     % number of FFT peaks to consider
-        Alpha         = 0.3;   % smoothing factor (0..1)
-        MaxJumpHz     = 2e3;   % max CFO jump allowed between frames
+        UseHistory    = false;
+        NumCandidates = 3;
+        Alpha         = 0.3;
+        MaxJumpHz     = 2e3;
     end
 
     properties (Access = private)
-        lastCfoHz  = [];       % last smoothed CFO estimate in Hz
-        lastValid  = false;    % true if lastCfoHz is valid
+        lastCfoHz  = [];
+        lastValid  = false;
     end
 
     methods
         function obj = FftCfoEstimator(varargin)
-            % Constructor with name-value pairs
             if mod(numel(varargin),2) ~= 0
                 error('FftCfoEstimator:NameValue', ...
                       'Constructor expects name-value pairs.');
@@ -98,7 +54,6 @@ classdef FftCfoEstimator < handle
         end
 
         function resetHistory(obj)
-            % RESET HISTORY of the CFO tracker
             obj.lastCfoHz = [];
             obj.lastValid = false;
         end
