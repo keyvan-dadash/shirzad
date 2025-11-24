@@ -4,7 +4,7 @@ classdef (Abstract) Reader < handle
     %
     % data  : uint8 column vector
     % count : number of bytes returned (numel(data))
-    % eof   : logical, true if no more data (for repeating sources you can keep it false)
+    % eof   : logical, true if no more data
 
     methods (Abstract)
         [data, count, eof] = read(obj, maxBytes)

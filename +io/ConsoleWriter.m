@@ -11,7 +11,7 @@ classdef ConsoleWriter < io.Writer
             if isstring(data) || ischar(data)
                 txt = char(data);
             elseif isa(data, 'uint8')
-                txt = char(data(:).');  % row char vector
+                txt = char(data(:).');
             else
                 error('ConsoleWriter: data must be uint8, char, or string.');
             end

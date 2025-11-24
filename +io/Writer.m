@@ -2,8 +2,7 @@ classdef (Abstract) Writer < handle
     % Writer interface (Go-style):
     %   write(obj, data)
     %
-    % data : typically uint8 column vector (raw bytes), but subclasses
-    %        can also accept char/string and normalize.
+    % data : typically uint8 column vector (raw bytes).
 
     methods (Abstract)
         write(obj, data)
