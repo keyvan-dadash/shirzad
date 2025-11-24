@@ -93,7 +93,7 @@ classdef DecisionDirectedCarrierSync < handle
                 obj.phase = obj.phase + obj.freq + obj.Kp * e_k;
             end
 
-            % fprintf("f: %.3f and p: %.3f\n", obj.freq, obj.phase);
+            fprintf("f: %.3f and p: %.3f\n", obj.freq, obj.phase);
         end
     end
 

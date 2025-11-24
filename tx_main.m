@@ -3,7 +3,7 @@ clear; clc;
 %% ---------- Params ----------
 fc              = 10e6;
 MasterClockRate = 100e6;
-Fs              = 1e6;
+Fs              = 5e6;
 Interp          = MasterClockRate/Fs;
 
 M   = 4;  bps = log2(M);
@@ -131,7 +131,10 @@ while true
     paySyms = modQPSK.modulate(infoBits);
 
     %% ---------- full frame = [preamble; payload] ----------
-    frmSyms = [preSyms; paySyms];
+    frmSyms_raw = [preSyms; paySyms];
+
+    pilotAmp = 0.8;  % example
+    frmSyms = pilotAmp + frmSyms_raw;
 
     %% ---------- upsample & RRC ----------
     up = zeros(numel(frmSyms)*sps, 1);
@@ -139,6 +142,10 @@ while true
 
     txWave = txRRC.process(up);
     txWave = txWave ./ max(abs(txWave)) * 0.8;
+
+    % fprintf('abs of txwave: %.3f\n', abs(txWave));
+
+
 
     %% ---------- Optional CFO injection (disabled) ----------
     % N       = numel(txWave);

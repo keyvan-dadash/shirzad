@@ -14,17 +14,17 @@ assert(exist('dsp.UDPReceiver','class')==8, ...
   ['Install "DSP System Toolbox" for UDP/USRP support.']);
 
 %% ---------- User/link params (MUST MATCH TX) ----------
-fc              = 9.95e6;
+fc              = 8e6;
 MasterClockRate = 100e6;
-Fs              = 1e6;
-Decim           = MasterClockRate/Fs;  %#ok<NASGU>
+Fs              = 5e6;
+Decim           = MasterClockRate/Fs;
 
 M   = 4;  bps = log2(M);
 sps = 10; beta = 0.35; span = 10;
 
 preambleHalfLen = 128;
 preambleLen     = 2 * preambleHalfLen;
-payloadSyms     = 512;        % *** unchanged ***
+payloadSyms     = 512;
 frameSyms       = preambleLen + payloadSyms;
 rxGain_dB       = 0;
 
@@ -33,12 +33,12 @@ SamplesPerFrame = 8000;
 modQPSK = modulators.QpskModulator();
 demQPSK = demodulators.QpskDemodulator();
 
-%% ---------- FEC decoder ----------
+%% FEC decoder
 dec = fec.ViterbiDecoder.rateHalf_K3();
 K   = 3;
 Kminus1 = K - 1;
 
-%% ---------- Payload + FEC + protocol structure ----------
+%% Protocol for using with frame structure
 infoBitsLen  = payloadSyms * bps;   % 540 bits
 pilotBitsLen = 100;                 % must match TX
 
@@ -66,7 +66,7 @@ fprintf('  databitsLen     : %d bits\n', databitsLen);
 fprintf('  L_in (into enc) : %d bits\n', L_in);
 fprintf('  codedBitsLen    : %d bits, padBits=%d\n', codedBitsLen, padBitsLen);
 
-%% ---------- Preamble (known at RX, must match TX) ----------
+%% Preamble
 mseqGen = training.MSequenceGenerator('Degree', 9);
 preBitsHalf = mseqGen.generateBits(preambleHalfLen * bps);
 preSymsHalf = modQPSK.modulate(preBitsHalf);
@@ -88,19 +88,19 @@ agc = gain.SimpleAgc( ...
     'AdaptationStepSize', 1e-3, ...
     'TargetPower',        1.0);
 
-dcblock = filters.DcBlocker('Length',64);
+dcblock = filters.DcBlocker('Length',8192);
 
 carSyncCoarse = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
     'DampingFactor',          0.707, ...
-    'NormalizedLoopBandwidth',0.1);
+    'NormalizedLoopBandwidth',0.2);
 
 carSyncFine = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
     'DampingFactor',          0.707, ...
-    'NormalizedLoopBandwidth',0.001);
+    'NormalizedLoopBandwidth',0.005);
 
 carSyncNow = carSyncCoarse;
 useFine    = false;
@@ -116,7 +116,7 @@ preDet = sync.RepeatedPreambleDetector( ...
 fftCfoEst = sync.FftCfoEstimator( ...
     'SampleRateSym', Rsym, ...
     'PreambleSyms',  preSyms, ...
-    'Nfft',          4096, ...
+    'Nfft',          8192, ...
     'NumCandidates', 3);
 
 cfoInitialized     = false;
@@ -124,6 +124,9 @@ fCfoHz_trk         = 0;
 cfoAlpha           = 0.05;
 cfoMaxJumpHz       = 200;
 metricTrustThresh  = 0.24;
+
+superCoarseFreq = 0;
+isSuperCoarseReady = false;
 
 %% ---------- Source & Sink ----------
 rfSrc = sources.SDRuBasebandSource( ...
@@ -153,6 +156,18 @@ frames = 0;
 frameSam   = frameSyms * sps;
 maxHoldSam = 10*frameSam + 8*sps + span*sps;
 
+sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
+    'PlotAsTwoSidedSpectrum',true, ...
+    'SpectrumType','Power density', ...
+    'Title','RX spectrum (post DC/AGC)');
+
+coarseBuff = [];
+buffLen = 16384;
+
+superCoarseFreq    = 0;
+isSuperCoarseReady = false;
+sampleIndex = 0;
+
 while true
     %% ---------- Pull chunk from source ----------
     [xRaw, srcInfo] = rfSrc.readFrame();
@@ -174,6 +189,38 @@ while true
         continue;
     end
 
+    if isSuperCoarseReady && superCoarseFreq ~= 0
+        N = numel(xRaw);
+        n = (0:N-1).' + sampleIndex;   % global sample index
+        xRaw = xRaw .* exp(-1j * 2*pi*superCoarseFreq/Fs .* n);
+        sampleIndex = sampleIndex + N;
+    end
+
+    % sa(xRaw);
+
+    if ~isSuperCoarseReady
+        coarseBuff = [coarseBuff; xRaw];
+    
+        if numel(coarseBuff) > buffLen
+            XCfo = coarseBuff(1:buffLen);
+        
+            w = hann(buffLen);
+            fft_result = fftshift(fft(XCfo .* w));
+        
+            [~, peak] = max(abs(fft_result));
+    
+            peak_new = peak - (buffLen / 2 + 1);
+        
+            superCoarseFreq = peak_new * Fs / buffLen;
+            fprintf('the cfo is %.3f and old and new peaks are %d, %d\n', superCoarseFreq, peak, peak_new);
+            isSuperCoarseReady = true;
+    
+            coarseBuff = [];
+        end
+    end
+
+
+
     %% ---------- DC blocker + AGC ----------
     xDC = dcblock.process(xRaw);
     if ~useFine
@@ -181,6 +228,8 @@ while true
     else
         xAGC = xDC;
     end
+
+    % xAGC = xRaw;
 
     %% ---------- Detection path ----------
     yDet = rrcDet.process(xAGC);
@@ -287,6 +336,8 @@ while true
                 frames, numel(rxBits), infoBitsLen);
             break;
         end
+
+        % constDiag(rxBits);
 
         % [pilot | codedBits(436) | padBits(4)]
         codedBits = rxBits(pilotBitsLen+1 : pilotBitsLen+codedBitsLen);
