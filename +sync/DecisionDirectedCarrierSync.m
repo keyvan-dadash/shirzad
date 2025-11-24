@@ -19,16 +19,16 @@ classdef DecisionDirectedCarrierSync < handle
     %   'InputSamplesPerSymbol' = 1 and 'Modulation' = 'QAM'.
 
     properties
-        ModulationOrder        (1,1) double {mustBePositive,mustBeInteger} = 4
+        ModulationOrder        (1,1) double {mustBePositive, mustBeInteger} = 4
         SamplesPerSymbol       (1,1) double {mustBePositive} = 1
         DampingFactor          (1,1) double {mustBePositive} = 0.707
         NormalizedLoopBandwidth(1,1) double {mustBePositive} = 0.01
     end
 
     properties (Access = private)
-        phase   (1,1) double = 0;   % current NCO phase (rad)
-        freq    (1,1) double = 0;   % current NCO frequency (rad/sym)
-        Kp      (1,1) double = 0;   % proportional gain
+        phase   (1,1) double = 0;   % current phase
+        freq    (1,1) double = 0;   % current frequency
+        Kp      (1,1) double = 0;   % gain of each iteration
         Ki      (1,1) double = 0;   % integral gain
     end
 
