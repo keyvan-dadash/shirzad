@@ -1,15 +1,5 @@
 classdef ConvEncoder < handle
-    % Simple rate-1/2 convolutional encoder (binary, non-recursive).
-    %
-    % State representation:
-    %   Memory bits = [u(k-1), u(k-2), ..., u(k-K+1)]  (1 x (K-1))
-    %
-    % Generator matrix G is size [nOut x K], with rows = polynomials
-    % in binary, left-most column = current input bit.
-    %
-    % Example for rate 1/2, K=3:
-    %   G = [1 1 1;   % g0(D) = 1 + D + D^2
-    %        1 0 1];  % g1(D) = 1 + D^2
+    % Simple rate-1/2 convolutional encoder.
 
     properties
         G              % [nOut x K] binary (0/1)
@@ -21,9 +11,8 @@ classdef ConvEncoder < handle
 
     methods
         function obj = ConvEncoder(G)
-            % G: [nOut x K] binary matrix
             if nargin < 1
-                % Default to rate-1/2, K=3, G = [111; 101]
+                % Default to rate-1/2, K=3
                 G = [1 1 1;
                      1 0 1];
             end
@@ -35,29 +24,19 @@ classdef ConvEncoder < handle
         end
 
         function reset(obj)
-            % Reset encoder to all-zero state.
             obj.State(:) = 0;
         end
 
         function v = encode(obj, u, terminate)
-            % Encode a sequence of bits.
-            %
-            % u         : column or row vector of {0,1}
-            % terminate : if true (default), appends K-1 zero bits to
-            %             force final state to zero.
-            %
-            % v : column vector of {0,1}
-
             if nargin < 3
                 terminate = true;
             end
 
-            u = u(:).';               % row
-            u = double(u ~= 0);       % ensure 0/1 doubles
-            GD = obj.G;               % nOut x K
+            u = u(:).';
+            u = double(u ~= 0);
+            GD = obj.G;
             K  = obj.K;
 
-            % Optional termination bits to bring state back to zero
             if terminate
                 u = [u, zeros(1, obj.Memory)];
             end
@@ -72,7 +51,7 @@ classdef ConvEncoder < handle
                 reg = [uk, obj.State];
 
                 % output bits: vRow = reg * G.' (mod 2)
-                vRow = mod(reg * GD.', 2);    % 1 x nOut
+                vRow = mod(reg * GD.', 2);
 
                 % update state: new memory = reg(1:K-1)
                 obj.State = reg(1:K-1);
@@ -81,13 +60,12 @@ classdef ConvEncoder < handle
                 outIndex = outIndex + obj.nOut;
             end
 
-            v = v(:);  % column
+            v = v(:);
         end
     end
 
     methods (Static)
         function obj = rateHalf_K3()
-            % Convenience constructor: rate-1/2, K=3, G = [111; 101].
             G = [1 1 1;
                  1 0 1];
             obj = fec.ConvEncoder(G);

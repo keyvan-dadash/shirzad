@@ -14,7 +14,7 @@ assert(exist('dsp.UDPReceiver','class')==8, ...
   ['Install "DSP System Toolbox" for UDP/USRP support.']);
 
 %% ---------- User/link params (MUST MATCH TX) ----------
-fc              = 10e6;
+fc              = 9.95e6;
 MasterClockRate = 100e6;
 Fs              = 1e6;
 Decim           = MasterClockRate/Fs;  %#ok<NASGU>
@@ -22,13 +22,13 @@ Decim           = MasterClockRate/Fs;  %#ok<NASGU>
 M   = 4;  bps = log2(M);
 sps = 10; beta = 0.35; span = 10;
 
-preambleHalfLen = 64;
+preambleHalfLen = 128;
 preambleLen     = 2 * preambleHalfLen;
 payloadSyms     = 512;        % *** unchanged ***
 frameSyms       = preambleLen + payloadSyms;
 rxGain_dB       = 0;
 
-SamplesPerFrame = 6420;
+SamplesPerFrame = 8000;
 
 modQPSK = modulators.QpskModulator();
 demQPSK = demodulators.QpskDemodulator();
@@ -94,13 +94,13 @@ carSyncCoarse = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
     'DampingFactor',          0.707, ...
-    'NormalizedLoopBandwidth',0.01);
+    'NormalizedLoopBandwidth',0.1);
 
 carSyncFine = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
     'DampingFactor',          0.707, ...
-    'NormalizedLoopBandwidth',0.005);
+    'NormalizedLoopBandwidth',0.001);
 
 carSyncNow = carSyncCoarse;
 useFine    = false;
@@ -117,7 +117,6 @@ fftCfoEst = sync.FftCfoEstimator( ...
     'SampleRateSym', Rsym, ...
     'PreambleSyms',  preSyms, ...
     'Nfft',          4096, ...
-    'UseHistory',    false, ...
     'NumCandidates', 3);
 
 cfoInitialized     = false;

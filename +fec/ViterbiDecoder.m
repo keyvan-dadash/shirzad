@@ -1,16 +1,5 @@
 classdef ViterbiDecoder < handle
     % Hard-decision Viterbi decoder for binary convolutional code.
-    %
-    % Uses same generator structure as ConvEncoder:
-    %   - G: [nOut x K] binary matrix
-    %   - rate = 1 / nOut
-    %
-    % Assumes "terminated" encoding: encoder started in all-zero state
-    % and appended K-1 zeros at the end. This decoder:
-    %   - assumes initial state = 0
-    %   - chooses best final state (usually 0)
-    %   - RETURNS ONLY THE INFORMATION BITS (it drops last K-1 bits).
-
     properties
         G              % [nOut x K] binary
         K              % constraint length
@@ -24,7 +13,6 @@ classdef ViterbiDecoder < handle
 
     methods
         function obj = ViterbiDecoder(G)
-            % G: [nOut x K] binary matrix
             if nargin < 1
                 G = [1 1 1;
                      1 0 1];  % same as ConvEncoder default
@@ -35,25 +23,23 @@ classdef ViterbiDecoder < handle
             obj.Memory = obj.K - 1;
             obj.NumStates = 2^(obj.Memory);
 
-            % Enumerate all states as binary vectors (u(k-1),...,u(k-K+1))
             obj.StateBits = zeros(obj.NumStates, obj.Memory);
             for s = 0:obj.NumStates-1
                 obj.StateBits(s+1,:) = de2bi(s, obj.Memory, 'left-msb');
             end
 
-            % Precompute transition tables
             obj.NextState  = zeros(obj.NumStates, 2, 'uint16');
             obj.OutputBits = zeros(obj.NumStates, 2, obj.nOut);
 
             GD = obj.G;
             for sIdx = 1:obj.NumStates
-                mem = obj.StateBits(sIdx,:);   % 1 x (K-1)
+                mem = obj.StateBits(sIdx,:);
                 for b = 0:1
                     % Build full register for this transition
-                    reg = [b, mem];            % 1 x K
+                    reg = [b, mem];
 
                     % Output bits for this transition
-                    out = mod(reg * GD.', 2);  % 1 x nOut
+                    out = mod(reg * GD.', 2);
 
                     % Next state's memory bits: [b, mem(1:end-1)]
                     newMem = reg(1:end-1);
@@ -67,10 +53,6 @@ classdef ViterbiDecoder < handle
 
         function uHat = decode(obj, v)
             % Decode hard bits with Viterbi.
-            %
-            % v : column or row vector of {0,1}; length must be multiple of nOut
-            %
-            % uHat : column vector of estimated INFO bits (tail bits removed)
 
             v = v(:).';
             v = double(v ~= 0);
@@ -81,18 +63,16 @@ classdef ViterbiDecoder < handle
                       numel(v), nOut);
             end
 
-            T = numel(v) / nOut;   % number of input-bit steps
-            rx = reshape(v, nOut, T).';   % T x nOut
+            T = numel(v) / nOut;
+            rx = reshape(v, nOut, T).';
 
             S  = obj.NumStates;
             NS = obj.NextState;
             OB = obj.OutputBits;
 
-            % Path metrics (large initial values)
             PM = inf(1,S);
-            PM(1) = 0;  % start at all-zero state (index 1)
+            PM(1) = 0;
 
-            % Survivor info
             PrevState = zeros(T, S, 'uint16');
             PrevInput = false(T, S);
 
@@ -101,7 +81,7 @@ classdef ViterbiDecoder < handle
                 newPrevSta  = zeros(1,S, 'uint16');
                 newPrevInp  = false(1,S);
 
-                rxRow = rx(t,:);  % 1 x nOut
+                rxRow = rx(t,:);
 
                 for sIdx = 1:S
                     pmOld = PM(sIdx);
@@ -109,12 +89,10 @@ classdef ViterbiDecoder < handle
                         continue;
                     end
 
-                    % Try input bit 0 and 1
                     for b = 0:1
                         ns = NS(sIdx, b+1);
                         out = squeeze(OB(sIdx, b+1, :)).';  % 1 x nOut
 
-                        % Hamming branch metric
                         bm = sum(out ~= rxRow);
                         metric = pmOld + bm;
 
@@ -131,7 +109,6 @@ classdef ViterbiDecoder < handle
                 PrevInput(t,:) = newPrevInp;
             end
 
-            % Traceback from best final state
             [~, bestState] = min(PM);
             uFull = false(T,1);
             s = uint16(bestState);
@@ -140,7 +117,6 @@ classdef ViterbiDecoder < handle
                 s        = PrevState(t,s);
             end
 
-            % Drop tail bits (K-1)
             infoLen = T - obj.Memory;
             if infoLen <= 0
                 error('Sequence too short (%d) for K=%d.', T, obj.K);

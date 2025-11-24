@@ -9,7 +9,7 @@ Interp          = MasterClockRate/Fs;
 M   = 4;  bps = log2(M);
 sps = 10; beta = 0.35; span = 10;
 
-preambleHalfLen = 64;
+preambleHalfLen = 128;
 preambleLen     = 2*preambleHalfLen;
 
 payloadSyms = 512;          % *** unchanged ***
