@@ -1,22 +1,5 @@
 classdef DcBlocker < handle
-    %Simple DC blocker using exponential running-average subtraction.
-    %
-    %   y = obj.process(x) removes (slow) DC offset from x by tracking
-    %   a smoothed mean and subtracting it:
-    %
-    %       mean_n = (1 - alpha)*mean_{n-1} + alpha*x[n]
-    %       y[n]   = x[n] - mean_n
-    %
-    %   where alpha ≈ 1/Length.
-    %
-    %   Parameters (name/value in ctor):
-    %       'Length' : effective averaging length (e.g. 64)
-    %
-    %   Usage:
-    %       dc = filters.DcBlocker('Length',64);
-    %       y  = dc.process(x);
-    %
-    %   State (mean estimate) is kept across calls for streaming use.
+    % Simple DC blocker using exponential running-average subtraction.
 
     properties
         Length (1,1) double {mustBePositive} = 64;
@@ -41,16 +24,10 @@ classdef DcBlocker < handle
         end
 
         function reset(obj)
-            %RESET Reset internal DC estimate.
             obj.meanState = 0;
         end
 
         function y = process(obj, x)
-            %PROCESS Remove DC from x (vector, real or complex).
-            %
-            %   x : row or column vector
-            %   y : same size as x, with DC removed
-
             if isempty(x)
                 y = x;
                 return;
