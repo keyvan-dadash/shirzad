@@ -88,7 +88,7 @@ agc = gain.SimpleAgc( ...
     'AdaptationStepSize', 1e-3, ...
     'TargetPower',        1.0);
 
-dcblock = filters.DcBlocker('Length',8192);
+dcblock = filters.DcBlocker('Length',1024);
 
 carSyncCoarse = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
@@ -100,7 +100,7 @@ carSyncFine = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
     'DampingFactor',          0.707, ...
-    'NormalizedLoopBandwidth',0.005);
+    'NormalizedLoopBandwidth',0.01);
 
 carSyncNow = carSyncCoarse;
 useFine    = false;
@@ -156,7 +156,7 @@ frames = 0;
 frameSam   = frameSyms * sps;
 maxHoldSam = 10*frameSam + 8*sps + span*sps;
 
-sa = dsp.SpectrumAnalyzer('SampleRate',Fs, ...
+sa = spectrumAnalyzer('SampleRate',Fs, ...
     'PlotAsTwoSidedSpectrum',true, ...
     'SpectrumType','Power density', ...
     'Title','RX spectrum (post DC/AGC)');
@@ -234,8 +234,8 @@ while true
     %% ---------- Detection path ----------
     yDet = rrcDet.process(xAGC);
 
-    xBuf    = [xBuf;    xAGC]; %#ok<AGROW>
-    yDetBuf = [yDetBuf; yDet]; %#ok<AGROW>
+    xBuf    = [xBuf;    xAGC];
+    yDetBuf = [yDetBuf; yDet];
 
     if numel(xBuf) > maxHoldSam
         extra = numel(xBuf) - maxHoldSam;
@@ -263,6 +263,8 @@ while true
 
         off         = detRes.SampleOffset;
         preStartSym = detRes.PreambleStartSym;
+        wSym_sc   = detRes.CfoRadPerSym;         % rad/sym from Schmidl
+        fCfoHz_meas = wSym_sc * Rsym / (2*pi);
 
         ySymDet = yDetBuf(1+off : sps : end);
         NsymDet = numel(ySymDet);
@@ -277,7 +279,14 @@ while true
         end
 
         %% ---------- CFO estimate ----------
-        [wSym_meas, fCfoHz_meas, ~] = fftCfoEst.estimate(ySymDet, preStartSym); %#ok<NASGU>
+        % [wSym_meas, fCfoHz_meas, ~] = fftCfoEst.estimate(ySymDet, preStartSym);
+        % binSpacing = Rsym / fftCfoEst.Nfft;  % ≈ 61 Hz
+        % fprintf('the bin is: %.3f\n', binSpacing);
+        % if abs(fCfoHz_meas) < 2.1 * binSpacing
+        %     % treat near-DC as zero, to avoid ±61 / ±122 Hz flicker
+        %     fCfoHz_meas = 0;
+        % end
+        % 
         if cfoInitialized
             fCfoHz_use = fCfoHz_trk;
         else
@@ -305,13 +314,13 @@ while true
 
         %% ---------- carrier/phase recovery ----------
         rxSyms_eq = carSyncNow.process(rxSyms_raw);
-
-        G    = [1, -1, 1j, -1j];
+        G    = [1, -1, 1j, -1j, 1];
         errs = zeros(1,4);
         for g = 1:4
             rb = qamDemBits(rxSyms_eq * G(g));
             Kc = min(numel(rb), pilotBitsLen);
             errs(g) = mean(rb(1:Kc) ~= pilotBits(1:Kc));
+            % fprintf('error is %.3f\n', errs(g));
         end
         [~, ig] = min(errs);
         rxSyms = rxSyms_eq * G(ig);

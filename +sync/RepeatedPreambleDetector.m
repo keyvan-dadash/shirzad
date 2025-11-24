@@ -59,6 +59,7 @@ classdef RepeatedPreambleDetector < handle
             best.PreambleStartSym = 0;
             best.WindowPower      = 0;
             best.Found            = false;
+            best.CfoRadPerSym     = 0;
 
             if isempty(y)
                 res = best;
@@ -102,6 +103,10 @@ classdef RepeatedPreambleDetector < handle
                     best.SampleOffset     = off;
                     best.PreambleStartSym = idxMax;  % 1-based
                     best.WindowPower      = R(idxMax);
+
+                    Pbest = P(idxMax);
+                    phi   = angle(Pbest);
+                    best.CfoRadPerSym = phi / Lh;
                 end
             end
 
