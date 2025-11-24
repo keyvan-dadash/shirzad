@@ -1,26 +1,15 @@
 classdef PayloadCollectorSink < sinks.AbstractSink
-    %PAYLOADCOLLECTORSINK RX sink that stores decoded payload bits.
-    %
-    % This implements the idea "sink = payload" on the RX side.
-    % It doesn't do any DSP; it just receives payload frames and keeps
-    % them in memory (or optionally discards them and only counts).
-    %
-    % Usage in RX:
-    %   paySink = sinks.PayloadCollectorSink();
-    %   paySink.writeFrame(decBits, struct('FrameIndex', frames));
-    %
-    %   % Later:
-    %   allBits = paySink.concatenateAll();
+    % PayloadCollectorSink collects payloads
 
     properties
-        StoreHistory   logical = true;   % If false, we only count frames
+        StoreHistory   logical = true;
     end
 
     properties (SetAccess = private)
-        Frames         cell   = {};      % Cell array of payload vectors
-        FrameLengths   double = [];      % Length of each frame
-        NumFrames      double = 0;       % Number of frames written
-        TotalBits      double = 0;       % Total number of bits
+        Frames         cell   = {};
+        FrameLengths   double = [];
+        NumFrames      double = 0;
+        TotalBits      double = 0;
     end
 
     methods
@@ -29,11 +18,6 @@ classdef PayloadCollectorSink < sinks.AbstractSink
         end
 
         function writeFrame(obj, payloadBits, info)
-            %WRITEFRAME Store one frame of payload bits.
-            %
-            % payloadBits: column vector in {0,1} (double/logical)
-            % info       : optional struct (e.g., FrameIndex)
-
             if nargin < 3
                 info = struct();
             end
@@ -51,7 +35,6 @@ classdef PayloadCollectorSink < sinks.AbstractSink
                 obj.Frames{end+1,1} = payloadBits(:);
             end
 
-            % Optional debug print
             if isfield(info,'Verbose') && info.Verbose
                 fprintf('Stored RX payload frame %d (%d bits)\n', ...
                         obj.NumFrames, L);
@@ -59,7 +42,7 @@ classdef PayloadCollectorSink < sinks.AbstractSink
         end
 
         function bits = concatenateAll(obj)
-            %CONCATENATEALL Concatenate all stored frames into one vector.
+            % Lets concate the payloads
             if ~obj.StoreHistory
                 error('PayloadCollectorSink:NoHistory', ...
                       'History is not being stored (StoreHistory=false).');
@@ -68,7 +51,6 @@ classdef PayloadCollectorSink < sinks.AbstractSink
         end
 
         function reset(obj)
-            %RESET Clear history and counters.
             obj.Frames       = {};
             obj.FrameLengths = [];
             obj.NumFrames    = 0;
@@ -76,7 +58,7 @@ classdef PayloadCollectorSink < sinks.AbstractSink
         end
 
         function release(obj)
-            % Nothing external to release.
+            % No need to release
         end
     end
 end

@@ -1,21 +1,5 @@
 classdef SDRuWaveformSink < sinks.AbstractSink
-    %SDRUWAVEFORMSINK Sink that sends complex baseband waveforms to USRP N200/N210.
-    %
-    % This corresponds to the 'tx' object in your TX script.
-    %
-    % Usage:
-    %   sink = sinks.SDRuWaveformSink( ...
-    %       'IPAddress',         '192.168.10.5', ...
-    %       'CenterFrequency',   fc, ...
-    %       'MasterClockRate',   MasterClockRate, ...
-    %       'InterpolationFactor', Interp, ...
-    %       'Gain',              txGain_dB, ...
-    %       'UseExternalRef',    false);
-    %
-    %   sink.writeFrame(txWave);
-    %
-    % You can swap this sink for a UDPSink, FileSink, etc., without
-    % touching the rest of the TX chain.
+    % SDRuWaveformSink transfers the wave to the SDR platform.
 
     properties (SetAccess = private)
         IPAddress
@@ -64,11 +48,6 @@ classdef SDRuWaveformSink < sinks.AbstractSink
         end
 
         function writeFrame(obj, frame, info)
-            %WRITEFRAME Send one waveform frame to the USRP.
-            %
-            % frame: complex column vector (normalized, e.g. |x|<=1)
-            % info : optional struct, e.g. FrameIndex
-
             if nargin < 3
                 info = struct();
             end
@@ -81,7 +60,7 @@ classdef SDRuWaveformSink < sinks.AbstractSink
             obj.TxObj(frame);
             obj.FrameIndex = obj.FrameIndex + 1;
 
-            % Optional: print debug info if requested
+            % For debug
             if isfield(info,'Verbose') && info.Verbose
                 fprintf('TX frame %d, %d samples\n', ...
                         obj.FrameIndex, numel(frame));
@@ -89,14 +68,12 @@ classdef SDRuWaveformSink < sinks.AbstractSink
         end
 
         function reset(obj)
-            %RESET Re-create the TX object and reset frame counter.
             obj.release();
             obj.createTxObj();
             obj.FrameIndex = 0;
         end
 
         function release(obj)
-            %RELEASE Release USRP handle.
             if ~isempty(obj.TxObj)
                 try
                     release(obj.TxObj);
@@ -109,7 +86,7 @@ classdef SDRuWaveformSink < sinks.AbstractSink
 
     methods (Access = private)
         function createTxObj(obj)
-            % Internal helper to configure comm.SDRuTransmitter
+            % Configuration for using comm.SDRuTransmitter
 
             tx = comm.SDRuTransmitter( ...
                 'Platform',         obj.Platform, ...

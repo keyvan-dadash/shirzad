@@ -1,15 +1,10 @@
 classdef (Abstract) AbstractSink < handle
-    %ABSTRACTSINK Common interface for all sinks in the TX/RX chain.
-    %
-    % A Sink consumes frames of data via writeFrame().
-    % Examples:
-    %   - USRP transmitter (TX side)
-    %   - Payload bit logger / file writer (RX side)
-    %   - UDP loopback endpoint, etc.
+    % AbstractSink is a class that represent where the data or wave should
+    % be written to.
 
     properties (SetAccess = protected)
-        Name        % Human-readable name
-        SampleRate  % [Hz] for sample-taking sinks (NaN if not applicable)
+        Name
+        SampleRate
     end
 
     methods
@@ -19,7 +14,6 @@ classdef (Abstract) AbstractSink < handle
         end
 
         function delete(obj)
-            % Attempt to release resources automatically when cleared.
             try
                 obj.release();
             catch
@@ -28,9 +22,7 @@ classdef (Abstract) AbstractSink < handle
     end
 
     methods (Abstract)
-        % Consume one frame of data.
-        %  frame : column vector / matrix
-        %  info  : optional struct (e.g. frame index, timestamp)
+        % Write the frame into the sink
         writeFrame(obj, frame, info);
 
         % Release hardware, files, sockets, etc.

@@ -4,7 +4,7 @@ classdef FixedMessageReader < io.Reader
 
     properties (Access = private)
         msgBytes   % uint8 row vector
-        repeat     % logical
+        repeat     % should be repated?
         exhausted  % logical, for repeat=false
     end
 
@@ -19,7 +19,7 @@ classdef FixedMessageReader < io.Reader
             end
 
             if ischar(msg)
-                obj.msgBytes = uint8(msg(:).');  % store as row
+                obj.msgBytes = uint8(msg(:).');
             elseif isa(msg, 'uint8')
                 obj.msgBytes = msg(:).';
             else
