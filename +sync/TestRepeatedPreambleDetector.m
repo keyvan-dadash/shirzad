@@ -109,5 +109,96 @@ classdef TestRepeatedPreambleDetector < matlab.unittest.TestCase
             testCase.verifyFalse(res.Found, ...
                 'Detector should not declare a preamble in pure noise with impossible threshold.');
         end
+
+        function testVectorizedDetectorLongSequence(testCase)
+            % Compare original RepeatedPreambleDetector with the
+            % vectorized schmidlCoxDetectFast on a long sequence
+
+            sps  = 10;
+            Lh   = 128;
+            Lpre = 2*Lh;
+            metricThresh = 0.2;
+            minPow       = 1e-7;
+
+            det = sync.RepeatedPreambleDetector( ...
+                'SamplesPerSymbol', sps, ...
+                'PreambleHalfLen',  Lh, ...
+                'MetricThreshold',  metricThresh, ...
+                'MinWindowPower',   minPow);
+
+            detf = sync.RepeatedPreambleDetector( ...
+                'SamplesPerSymbol', sps, ...
+                'PreambleHalfLen',  Lh, ...
+                'MetricThreshold',  metricThresh, ...
+                'MinWindowPower',   minPow);
+
+            rng(2025);
+            preHalf = exp(1j*2*pi*rand(Lh,1));
+            pre     = [preHalf; preHalf];
+
+            preStartSym = 100;
+            NsymBefore  = preStartSym - 1;
+            NsymAfter   = 300;
+
+            ySym = [zeros(NsymBefore,1); pre; zeros(NsymAfter,1)];
+            NsSym = numel(ySym);
+
+            offTrue = 3;
+
+            Nsamples = offTrue + (NsSym-1)*sps + 1;
+            y = zeros(Nsamples,1);
+
+            for k = 1:NsSym
+                idx = offTrue + (k-1)*sps + 1;
+                y(idx) = ySym(k);
+            end
+
+            tTotal = 0;
+            for k = 1:100
+                t1 = tic;
+                resOrig = det.detect(y);
+                tOrig = toc(t1);
+                tTotal = tTotal + tOrig;
+            end
+
+            tOrig = tTotal / 100;
+
+            tTotal = 0;
+            for k = 1:100
+                t1 = tic;
+                resFast = det.detectFast(y);
+                tFast = toc(t1);
+                tTotal = tTotal + tFast;
+            end
+
+            tFast = tTotal / 100;
+
+            fprintf('\nLong-sequence Schmidl-Cox detector timing (Nsamples=%d):\n', numel(y));
+            fprintf('  RepeatedPreambleDetector : %.6f s\n', tOrig);
+            fprintf('  schmidlCoxDetectFast     : %.6f s\n', tFast);
+
+            % --- Correctness checks ---
+            testCase.verifyTrue(resFast.Found, ...
+                'Vectorized detector failed to find preamble.');
+
+            testCase.verifyEqual(resFast.SampleOffset, offTrue, ...
+                'Vectorized detector SampleOffset mismatch.');
+
+            testCase.verifyEqual(resFast.PreambleStartSym, preStartSym, ...
+                'Vectorized detector PreambleStartSym mismatch.');
+
+            % If original detector also found something, check consistency
+            if resOrig.Found
+                testCase.verifyEqual(resOrig.SampleOffset, offTrue, ...
+                    'Original detector SampleOffset mismatch on long sequence.');
+                testCase.verifyEqual(resOrig.PreambleStartSym, preStartSym, ...
+                    'Original detector PreambleStartSym mismatch on long sequence.');
+
+                % CFO estimates should be close (here CFO is 0)
+                testCase.verifyLessThan( ...
+                    abs(resFast.CfoRadPerSym - resOrig.CfoRadPerSym), 1e-3, ...
+                    'CFO estimates differ too much between detectors.');
+            end
+        end
     end
 end

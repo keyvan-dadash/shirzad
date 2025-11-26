@@ -6,5 +6,6 @@ classdef (Abstract) Writer < handle
 
     methods (Abstract)
         write(obj, data)
+        close(obj)
     end
 end

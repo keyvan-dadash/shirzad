@@ -1,8 +1,8 @@
 classdef ViterbiDecoder < handle
-    % Hard-decision Viterbi decoder for binary convolutional code.
+    % Viterbi decoder for binary convolutional code.
     properties
         G              % [nOut x K] binary
-        K              % constraint length
+        K              % constraint length (3 for our case)
         nOut           % outputs per input bit
         Memory         % K-1
         NumStates      % 2^(K-1)
@@ -15,7 +15,7 @@ classdef ViterbiDecoder < handle
         function obj = ViterbiDecoder(G)
             if nargin < 1
                 G = [1 1 1;
-                     1 0 1];  % same as ConvEncoder default
+                     1 0 1];  % default for k = 3
             end
             obj.G      = double(G ~= 0);
             obj.nOut   = size(obj.G,1);
@@ -41,7 +41,7 @@ classdef ViterbiDecoder < handle
                     % Output bits for this transition
                     out = mod(reg * GD.', 2);
 
-                    % Next state's memory bits: [b, mem(1:end-1)]
+                    % Next state's memory
                     newMem = reg(1:end-1);
                     newStateIdx = uint16(bi2de(newMem, 'left-msb') + 1);
 
@@ -52,7 +52,7 @@ classdef ViterbiDecoder < handle
         end
 
         function uHat = decode(obj, v)
-            % Decode hard bits with Viterbi.
+            % Decode with Viterbi.
 
             v = v(:).';
             v = double(v ~= 0);

@@ -199,8 +199,8 @@ classdef Datagram
             checksumCalc = protocol.Datagram.calcChecksum(bytesForChecksum);
             ok = isequal(checksumCalc, checksumRx);
     
-            fprintf('got checksum: %d and suppose checksum: %d\n', ...
-                checksumRx, checksumCalc);
+            % fprintf('got checksum: %d and suppose checksum: %d\n', ...
+            %     checksumRx, checksumCalc);
     
             % Build object (even if ok = false, so we can debug it)
             obj = protocol.Datagram(seqNum, flags, pay(1:payloadLen), streamId);

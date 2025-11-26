@@ -14,10 +14,10 @@ assert(exist('dsp.UDPReceiver','class')==8, ...
   ['Install "DSP System Toolbox" for UDP/USRP support.']);
 
 %% ---------- User/link params (MUST MATCH TX) ----------
-fc              = 8e6;
+fc              = 10e6;
 MasterClockRate = 100e6;
-Fs              = 5e6;
-Decim           = MasterClockRate/Fs;
+Decim           = 128;
+Fs              = MasterClockRate/Decim;
 
 M   = 4;  bps = log2(M);
 sps = 10; beta = 0.35; span = 10;
@@ -170,6 +170,7 @@ sampleIndex = 0;
 
 while true
     %% ---------- Pull chunk from source ----------
+    tStart = tic;
     [xRaw, srcInfo] = rfSrc.readFrame();
     if ~srcInfo.IsValid
         pause(0.05);
@@ -179,6 +180,8 @@ while true
     if srcInfo.Overrun
         fprintf('Overrun/short read (%d < %d), resetting RX state\n', ...
             numel(xRaw), SamplesPerFrame);
+        % fprintf('The time is: %.3f\n', toc(tStart));
+        return;
 
         xBuf    = [];
         yDetBuf = [];
@@ -253,7 +256,7 @@ while true
         searchSyms   = frameSyms + 10;
         maxDetectSam = searchSyms * sps;
         yDetSearch   = yDetBuf(1 : min(numel(yDetBuf), maxDetectSam));
-        detRes       = preDet.detect(yDetSearch);
+        detRes       = preDet.detectFast(yDetSearch);
 
         if ~detRes.Found
             fprintf('No preamble: M=%.3f, Pow=%.3g\n', ...
@@ -325,7 +328,7 @@ while true
         [~, ig] = min(errs);
         rxSyms = rxSyms_eq * G(ig);
 
-        constDiag(rxSyms);
+        % constDiag(rxSyms);
 
         %% ---------- Es/N0 estimate ----------
         hb2 = qamDemBits(rxSyms);
@@ -356,7 +359,8 @@ while true
             break;
         end
 
-        uBits_hat = dec.decode(logical(codedBits));
+        % uBits_hat = dec.decode(logical(codedBits));
+        uBits_hat = fec.viterbi_k3_mex(logical(codedBits));
         uBits_hat = double(uBits_hat(:));
 
         if numel(uBits_hat) < databitsLen
@@ -388,9 +392,9 @@ while true
         paySink.writeFrame(payBits, struct('FrameIndex', frames));
 
         fprintf(['Summary: off=%d | M=%.3f | Pow=%.3g | ' ...
-                 'Es/N0≈%.1f dB | CFO_used≈%.1f Hz (%.3g rad/sym)\n'], ...
+                 'Es/N0≈%.1f dB | total time: %.3f | CFO_used≈%.1f Hz (%.3g rad/sym)\n'], ...
                 off, detRes.Metric, detRes.WindowPower, ...
-                SNRdB, fCfoHz_use, wSym_use);
+                SNRdB, toc(tStart), fCfoHz_use, wSym_use);
 
         %% ---------- CFO tracking update ----------
         if detRes.Metric >= metricTrustThresh

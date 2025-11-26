@@ -2,10 +2,10 @@ classdef SimpleAgc < handle
     % Simple block-AGC with exponential power averaging.
 
     properties
-        AveragingLength    (1,1) double {mustBePositive}      = 1000;
-        MaximumGain_dB     (1,1) double {mustBeNonnegative}   = 30;
-        AdaptationStepSize (1,1) double {mustBeNonnegative}   = 1e-3;
-        TargetPower        (1,1) double {mustBePositive}      = 1.0;
+        AveragingLength    = 1000;
+        MaximumGain_dB     = 30;
+        AdaptationStepSize = 1e-3;
+        TargetPower        = 1.0;
     end
 
     properties (Access = private)
@@ -15,7 +15,6 @@ classdef SimpleAgc < handle
 
     methods
         function obj = SimpleAgc(varargin)
-            % SimpleAgc('AveragingLength',1000, 'MaximumGain_dB',30, ...)
             if ~isempty(varargin)
                 p = inputParser;
                 addParameter(p,'AveragingLength',    obj.AveragingLength);

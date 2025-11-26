@@ -18,5 +18,9 @@ classdef ConsoleWriter < io.Writer
 
             fprintf('ConsoleWriter: "%s"\n', txt);
         end
+
+        function close(obj)
+            % nothing to close
+        end
     end
 end

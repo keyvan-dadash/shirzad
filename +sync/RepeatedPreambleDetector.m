@@ -23,6 +23,11 @@ classdef RepeatedPreambleDetector < handle
         MinWindowPower   = 1e-6;
     end
 
+    properties
+        wLh
+        wLh2
+    end
+
     methods
         function obj = RepeatedPreambleDetector(varargin)
             % Constructor with name-value pairs
@@ -38,6 +43,8 @@ classdef RepeatedPreambleDetector < handle
                         obj.SamplesPerSymbol = value;
                     case 'preamblehalflen'
                         obj.PreambleHalfLen  = value;
+                        obj.wLh = ones(obj.PreambleHalfLen, 1);
+                        obj.wLh2 = ones(2*obj.PreambleHalfLen, 1);
                     case 'metricthreshold'
                         obj.MetricThreshold  = value;
                     case 'minwindowpower'
@@ -102,6 +109,78 @@ classdef RepeatedPreambleDetector < handle
                     best.Metric           = Mmax;
                     best.SampleOffset     = off;
                     best.PreambleStartSym = idxMax;  % 1-based
+                    best.WindowPower      = R(idxMax);
+
+                    Pbest = P(idxMax);
+                    phi   = angle(Pbest);
+                    best.CfoRadPerSym = phi / Lh;
+                end
+            end
+
+            if best.Metric > obj.MetricThreshold && ...
+               best.WindowPower > obj.MinWindowPower
+                best.Found = true;
+            else
+                best.Found = false;
+            end
+
+            res = best;
+        end
+
+        function res = detectFast(obj, y)
+            % Vectorized Schmidl & Cox detector at symbol-rate.
+            % Same semantics as detectSlow, but faster.
+            % TODO: We can give this an offset hint
+
+            sps  = obj.SamplesPerSymbol;
+            Lh   = obj.PreambleHalfLen;
+            Lpre = 2 * Lh;
+
+            best.Metric           = 0;
+            best.SampleOffset     = 0;
+            best.PreambleStartSym = 0;
+            best.WindowPower      = 0;
+            best.Found            = false;
+            best.CfoRadPerSym     = 0;
+
+            if isempty(y)
+                res = best;
+                return;
+            end
+
+            y = y(:);
+            N = numel(y);
+
+            for off = 0:(sps-1)
+                ySym = y(1+off : sps : end);
+                Ns   = numel(ySym);
+
+                if Ns < Lpre + 1
+                    continue;
+                end
+
+                Lwin = Ns - 2*Lh;
+                if Lwin <= 0
+                    continue;
+                end
+
+                q = ySym(1:Ns-Lh) .* conj(ySym(1+Lh:Ns));
+                
+                Pfull = filter(obj.wLh, 1, q);
+
+                P = Pfull(Lh : Lh+Lwin-1);
+
+                pow   = abs(ySym).^2;
+                Rfull = filter(obj.wLh2, 1, pow);
+                R = Rfull(2*Lh : 2*Lh+Lwin-1);
+
+                M = abs(P).^2 ./ (R.^2 + eps);
+
+                [Mmax, idxMax] = max(M);
+                if Mmax > best.Metric && R(idxMax) > obj.MinWindowPower
+                    best.Metric           = Mmax;
+                    best.SampleOffset     = off;
+                    best.PreambleStartSym = idxMax;
                     best.WindowPower      = R(idxMax);
 
                     Pbest = P(idxMax);
