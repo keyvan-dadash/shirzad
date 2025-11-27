@@ -1,52 +1,63 @@
 clear; clc;
 
-%% ---------- Params ----------
+%% ---------- Link / USRP params ----------
 fc              = 10e6;
 MasterClockRate = 100e6;
 Interp          = 128;
-Fs              = MasterClockRate/Interp;
+Fs              = MasterClockRate / Interp;
 
 M   = 4;  bps = log2(M);
 sps = 10; beta = 0.35; span = 10;
 
 preambleHalfLen = 128;
-preambleLen     = 2*preambleHalfLen;
+payloadSyms     = 512;
+txGain_dB       = 0;
 
-payloadSyms = 512;          % *** unchanged ***
-txGain_dB   = 0;
-
+%% ---------- Modulator / Demodulator ----------
 modQPSK = modulators.QpskModulator();
+demQPSK = demodulators.QpskDemodulator();   % not strictly used in TX, but kept for symmetry
 
-%% ---------- FEC encoder (rate 1/2, K=3, TERMINATED) ----------
+%% ---------- FEC (rate 1/2, K=3, TERMINATED) ----------
 enc = fec.ConvEncoder.rateHalf_K3();
-K   = 3;
-Kminus1 = K - 1;
+K   = 3;              % constraint length
+Kminus1 = K - 1;      % memory
 
-%% ---------- Payload structure: pilot + FEC-coded protocol.Datagram ----------
-infoBitsLen  = payloadSyms * bps;   % 512*2 = 1024 bits
-pilotBitsLen = 100;                 % must match RX
+% FEC encoder: dataBits (0/1) -> coded bits (0/1), terminated
+fecEncodeFcn = @(dataBits) enc.encode(logical(dataBits), true);
 
-% Fixed datagram size
-msgCapBytes    = 40;                                   % total datagram bytes
-hdrBytes       = double(protocol.Datagram.HEADER_BYTES); % 8
-maxProtoPayload = msgCapBytes - hdrBytes;              % 32 payload bytes
+% Decode function is not used in TX, but Payload wants a handle.
+fecDecodeDummy = @(codedBits) error('Payload.decode is not used in TX.');
 
-databitsLen   = 8 * msgCapBytes;   % 40*8 = 320 datagram bits
+%% ---------- Payload / Frame structure ----------
+msgCapBytes   = 40;    % total datagram bytes (header + payload)
+pilotBitsLen  = 100;   % must match RX
 
-% TERMINATED code:
-%  - Encoder input: databitsLen info bits
-%  - Encoder appends K-1 tail zeros internally
-%  - Total time-steps T = databitsLen + (K-1)
-%  - Coded bits = 2*T
-L_in          = databitsLen + Kminus1;   % T = 320 + 2 = 322
-codedBitsLen  = 2 * L_in;               % 644 bits
+% Build preamble from m-sequence [a, a]
+pre = protocol.Preamble.fromMSequence(modQPSK, preambleHalfLen, ...
+                             'Degree', 9, 'Seed', 1001);
 
-bitsAfterPilot = infoBitsLen - pilotBitsLen;  % 1024 - 100 = 924
-padBitsLen    = bitsAfterPilot - codedBitsLen;  % 924 - 644 = 280
+% Build payload object (this computes codedBitsLen, padBitsLen internally)
+pay = protocol.Payload(modQPSK, demQPSK, ...
+              payloadSyms, msgCapBytes, pilotBitsLen, ...
+              fecEncodeFcn, fecDecodeDummy);
 
-if padBitsLen < 0
-    error('TX: FEC layout invalid (padBitsLen < 0).');
-end
+% Full PHY frame = [preamble | payload]
+fr = protocol.Frame(pre, pay);
+
+preambleLen = fr.NumPreambleSymbols;
+
+%% ---------- Protocol / FEC layout printout ----------
+hdrBytes        = double(protocol.Datagram.HEADER_BYTES);
+maxProtoPayload = msgCapBytes - hdrBytes;
+
+databitsLen  = fr.Payload.DataBitsLen;   % 8 * msgCapBytes
+codedBitsLen = fr.Payload.CodedBitsLen;
+padBitsLen   = fr.Payload.PadBitsLen;
+
+L_in = databitsLen + Kminus1;           % "time steps" into encoder
+assert(codedBitsLen == 2 * L_in, ...
+    'TX: codedBitsLen (%d) != 2*(databitsLen+%d)=%d.', ...
+    codedBitsLen, Kminus1, 2*L_in);
 
 fprintf('TX protocol+FEC:\n');
 fprintf('  datagram bytes  : %d (header=%d, payload<=%d)\n', ...
@@ -55,20 +66,10 @@ fprintf('  databitsLen     : %d bits\n', databitsLen);
 fprintf('  T = L_in        : %d time steps\n', L_in);
 fprintf('  codedBitsLen    : %d bits, padBits=%d\n', codedBitsLen, padBitsLen);
 
-%% ---------- Known pilot bits (must match RX) ----------
-rng(1001);
-pilotBits = randi([0 1], pilotBitsLen, 1);   % double 0/1
-
-%% ---------- Preamble (known at TX and RX) ----------
-mseqGen = training.MSequenceGenerator('Degree', 9);
-preBitsHalf = mseqGen.generateBits(preambleHalfLen * bps);
-preSymsHalf = modQPSK.modulate(preBitsHalf);
-preSyms     = [preSymsHalf; preSymsHalf];   % [a, a]
-
-%% ---------- RRC filter (STREAMING) ----------
+%% ---------- RRC filter (streaming) ----------
 txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
 
-%% ---------- Reader: source of messages ----------
+%% ---------- Message source ----------
 msgReader = io.FixedMessageReader('Hello from TX via USRP!', true);
 
 %% ---------- USRP sink ----------
@@ -87,7 +88,7 @@ seqNum = uint16(0);
 globalSampleIndex = 0; %#ok<NASGU>
 
 while true
-    %% ---------- Get message bytes from Reader ----------
+    %% ---------- Get payload bytes from reader ----------
     [msgBytes, n, eof] = msgReader.read(maxProtoPayload); %#ok<NASGU>
 
     if n == 0
@@ -96,56 +97,33 @@ while true
         payload = uint8(msgBytes(1:n));
     end
 
-    % Single-datagram message => START + END flags
+    % Single-datagram message => START + END
     flags = bitor(protocol.Datagram.FLAG_START, protocol.Datagram.FLAG_END);
 
     %% ---------- Build protocol datagram ----------
-    dgram = protocol.Datagram(seqNum, flags, payload, uint8(0));
+    dgram  = protocol.Datagram(seqNum, flags, payload, uint8(0));
     seqNum = seqNum + uint16(1);
 
-    %% ---------- Encode into fixed-size datagram (27 bytes) ----------
-    protoBytes = dgram.toBytes(msgCapBytes);   % always 27 bytes
+    %% ---------- Get fixed-size datagram bytes ----------
+    protoBytes = dgram.toBytes(msgCapBytes);  % always msgCapBytes bytes
 
-    %% ---------- bytes -> bits (column) ----------
-    dataBitsMatrix = de2bi(protoBytes, 8, 'left-msb').';
-    dataBits       = dataBitsMatrix(:);       % 216 bits, double 0/1
+    %% ---------- Frame encode: bytes -> [preamble | payload] QPSK symbols ----------
+    [frmSyms_raw, frameInfoTX] = fr.encode(protoBytes); %#ok<NASGU>
+    % frmSyms_raw: [preambleLen + payloadSyms x 1] complex
 
-    %% ---------- FEC encode (TERMINATED) ----------
-    % uBits: ONLY the 216 datagram bits.
-    % ConvEncoder.encode(..., true) appends K-1 tail zeros internally.
-    uBits = logical(dataBits);             % length = 216
+    % Optional DC offset / pilot amplitude, as in your original script
+    pilotAmp = 0.8;
+    frmSyms  = pilotAmp + frmSyms_raw;
 
-    codedBits = enc.encode(uBits, true);   % length = 2*(216+2) = 436
-    codedBits = double(codedBits(:));      % column
-
-    if numel(codedBits) ~= codedBitsLen
-        warning('TX: codedBits length %d != expected %d', ...
-            numel(codedBits), codedBitsLen);
-    end
-
-    %% ---------- Full info bits = [pilotBits; codedBits; padBits] ----------
-    padBits = zeros(padBitsLen,1);         % 4 zero bits
-    infoBits = [pilotBits; codedBits; padBits];  % 100+436+4 = 540
-
-    %% ---------- map to QPSK symbols ----------
-    paySyms = modQPSK.modulate(infoBits);
-
-    %% ---------- full frame = [preamble; payload] ----------
-    frmSyms_raw = [preSyms; paySyms];
-
-    pilotAmp = 0.8;  % example
-    frmSyms = pilotAmp + frmSyms_raw;
-
-    %% ---------- upsample & RRC ----------
+    %% ---------- Upsample & RRC ----------
     up = zeros(numel(frmSyms)*sps, 1);
     up(1:sps:end) = frmSyms;
 
     txWave = txRRC.process(up);
-    txWave = txWave ./ max(abs(txWave)) * 0.8;
 
-    % fprintf('abs of txwave: %.3f\n', abs(txWave));
-
-
+    if max(abs(txWave)) > 0
+        txWave = txWave ./ max(abs(txWave)) * 0.8;
+    end
 
     %% ---------- Optional CFO injection (disabled) ----------
     % N       = numel(txWave);
