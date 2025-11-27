@@ -32,11 +32,11 @@ fecDecodeDummy = @(codedBits) error('Payload.decode is not used in TX.');
 msgCapBytes   = 40;    % total datagram bytes (header + payload)
 pilotBitsLen  = 100;   % must match RX
 
-% Build preamble from m-sequence [a, a]
+% Preamble from m-sequence [a, a]
 pre = protocol.Preamble.fromMSequence(modQPSK, preambleHalfLen, ...
                              'Degree', 9, 'Seed', 1001);
 
-% Build payload object (this computes codedBitsLen, padBitsLen internally)
+% Payload object (computes codedBitsLen, padBitsLen internally)
 pay = protocol.Payload(modQPSK, demQPSK, ...
               payloadSyms, msgCapBytes, pilotBitsLen, ...
               fecEncodeFcn, fecDecodeDummy);
@@ -66,11 +66,17 @@ fprintf('  databitsLen     : %d bits\n', databitsLen);
 fprintf('  T = L_in        : %d time steps\n', L_in);
 fprintf('  codedBitsLen    : %d bits, padBits=%d\n', codedBitsLen, padBitsLen);
 
+%% ---------- Datagram source (application → datagram bytes) ----------
+% Example app: single text stream on StreamId=0
+msgReader = io.FixedMessageReader('Hello from TX via USRP!', true);
+
+streamSpecs(1).StreamId = uint8(0);
+streamSpecs(1).Reader   = msgReader;
+
+dgramSrc = sources.DatagramSource(msgCapBytes, streamSpecs);
+
 %% ---------- RRC filter (streaming) ----------
 txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
-
-%% ---------- Message source ----------
-msgReader = io.FixedMessageReader('Hello from TX via USRP!', true);
 
 %% ---------- USRP sink ----------
 txSink = sinks.SDRuWaveformSink( ...
@@ -84,28 +90,12 @@ txSink = sinks.SDRuWaveformSink( ...
 disp('TX: streaming frames via USRP. Ctrl+C to stop.');
 
 k = 0;
-seqNum = uint16(0);
 globalSampleIndex = 0; %#ok<NASGU>
 
 while true
-    %% ---------- Get payload bytes from reader ----------
-    [msgBytes, n, eof] = msgReader.read(maxProtoPayload); %#ok<NASGU>
-
-    if n == 0
-        payload = uint8([]);
-    else
-        payload = uint8(msgBytes(1:n));
-    end
-
-    % Single-datagram message => START + END
-    flags = bitor(protocol.Datagram.FLAG_START, protocol.Datagram.FLAG_END);
-
-    %% ---------- Build protocol datagram ----------
-    dgram  = protocol.Datagram(seqNum, flags, payload, uint8(0));
-    seqNum = seqNum + uint16(1);
-
-    %% ---------- Get fixed-size datagram bytes ----------
-    protoBytes = dgram.toBytes(msgCapBytes);  % always msgCapBytes bytes
+    %% ---------- Get one datagram from source ----------
+    % protoBytes : uint8 column, length = msgCapBytes
+    [protoBytes, dInfo] = dgramSrc.readFrame(); %#ok<NASGU>
 
     %% ---------- Frame encode: bytes -> [preamble | payload] QPSK symbols ----------
     [frmSyms_raw, frameInfoTX] = fr.encode(protoBytes); %#ok<NASGU>
@@ -137,6 +127,6 @@ while true
     k = k + 1;
 
     if mod(k,50) == 0
-        fprintf('TX sent %d frames (seq up to %d)...\n', k, uint16(seqNum-1));
+        fprintf('TX sent %d frames...\n', k);
     end
 end

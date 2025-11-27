@@ -5,7 +5,7 @@
 %   + PLL (decision-directed) for fine carrier/phase tracking
 %   + decision-directed Es/N0 estimate
 %   + Convolutional FEC decode (rate 1/2, K=3, terminated)
-%   + Message decode using protocol.Datagram
+%   + Datagram decode handled by sinks.PayloadCollectorSink via io.Writer
 %
 %   payloadSyms = 512
 
@@ -15,7 +15,7 @@ assert(exist('dsp.UDPReceiver','class')==8, ...
   ['Install "DSP System Toolbox" for UDP/USRP support.']);
 
 %% ---------- User/link params (MUST MATCH TX) ----------
-fc              = 9.8e6;        % NOTE: currently offset from TX for CFO testing
+fc              = 9.8e6;        % NOTE: offset from TX for CFO testing
 MasterClockRate = 100e6;
 Decim           = 128;
 Fs              = MasterClockRate/Decim;
@@ -35,7 +35,7 @@ demQPSK = demodulators.QpskDemodulator();
 qamDemBits = @(z) demQPSK.demodulateHard(z);
 
 %% ---------- FEC (rate 1/2, K=3, TERMINATED) ----------
-enc = fec.ConvEncoder.rateHalf_K3();
+enc = fec.ConvEncoder.rateHalf_K3();   % only for layout consistency
 dec = fec.ViterbiDecoder.rateHalf_K3();
 K   = 3;
 Kminus1 = K - 1;
@@ -69,7 +69,7 @@ frameSyms   = fr.NumFrameSymbols;
 % Consistency
 assert(preambleLen == 2*preambleHalfLen, 'RX: preambleLen mismatch.');
 
-% Sizes for convenience
+% Sizes for convenience / logging
 infoBitsLen  = fr.Payload.InfoBitsLen;
 databitsLen  = fr.Payload.DataBitsLen;
 codedBitsLen = fr.Payload.CodedBitsLen;
@@ -131,11 +131,11 @@ preDet = sync.RepeatedPreambleDetector( ...
     'MinWindowPower',   1e-7);
 
 %% ---------- (Optional) FFT-based CFO estimator ----------
-fftCfoEst = sync.FftCfoEstimator( ...
+fftCfoEst = sync.FftCfoEstimator( ... %#ok<NASGU>
     'SampleRateSym', Rsym, ...
     'PreambleSyms',  preSyms, ...
     'Nfft',          8192, ...
-    'NumCandidates', 3); %#ok<NASGU>  % not currently used
+    'NumCandidates', 3);  % not currently used
 
 cfoInitialized     = false;
 fCfoHz_trk         = 0;
@@ -152,8 +152,12 @@ rfSrc = sources.SDRuBasebandSource( ...
       'Gain',             rxGain_dB, ...
       'SamplesPerFrame',  SamplesPerFrame);
 
+% Datagram sink / demux
 paySink   = sinks.PayloadCollectorSink();
+
+% Stream 0 -> console writer
 msgWriter = io.ConsoleWriter();
+paySink.registerWriter(uint8(0), msgWriter, 'CloseOnEnd', false);
 
 constDiag = comm.ConstellationDiagram( ...
     'SamplesPerSymbol', 1, ...
@@ -185,7 +189,7 @@ sampleIndex        = 0;
 
 while true
     %% ---------- Pull chunk from source ----------
-    tStart = tic;
+    tStart = tic; %#ok<NASGU>
     [xRaw, srcInfo] = rfSrc.readFrame();
     if ~srcInfo.IsValid
         pause(0.05);
@@ -316,16 +320,7 @@ while true
         %% ---------- carrier/phase recovery ----------
         rxSyms_eq = carSyncNow.process(rxSyms_raw);
 
-        % Quadrant fix via pilot bits
-        G    = [1, -1, 1j, -1j];
-        errs = zeros(1,4);
-        for g = 1:4
-            rb = qamDemBits(rxSyms_eq * G(g));
-            Kc = min(numel(rb), pilotBitsLen);
-            errs(g) = mean(rb(1:Kc) ~= pilotBits(1:Kc));
-        end
-        [~, ig] = min(errs);
-        rxSyms = rxSyms_eq * G(ig);
+        [rxSyms, rotIdx, rotErrs] = demQPSK.resolvePhaseAmbiguity(rxSyms_eq, pilotBits);
 
         constDiag(rxSyms);
 
@@ -341,23 +336,11 @@ while true
         frames = frames + 1;
 
         %% ---------- Payload decode: symbols -> datagram bytes ----------
-        [dataBytes, payInfo] = fr.decodeFromPayload(rxSyms);
+        [dataBytes, payInfo] = fr.decodeFromPayload(rxSyms); %#ok<NASGU>
+        % dataBytes: uint8 column, length = msgCapBytes (one datagram)
 
-        %% ---------- parse protocol datagram ----------
-        [pkt, ok] = protocol.Datagram.fromBytes(dataBytes);
-
-        if ~ok
-            warning('Frame %d: datagram checksum FAILED (seq=%d). Dropping payload.', ...
-                frames, pkt.SeqNum);
-            pkt.debugPrint();
-        else
-            msgBytes = pkt.Payload(1 : pkt.PayloadLen);
-            msgWriter.write(msgBytes);
-        end
-
-        % For logging / capture: recovered payload bits (after FEC)
-        payBits = payInfo.payload.dataBitsHat;
-        paySink.writeFrame(payBits, struct('FrameIndex', frames));
+        %% ---------- Deliver datagram to PayloadCollectorSink ----------
+        paySink.writeFrame(dataBytes, struct('FrameIndex', frames));
 
         fprintf(['Summary: off=%d | M=%.3f | ' ...
                  'Es/N0≈%.1f dB | CFO_used≈%.1f Hz (%.3g rad/sym)\n'], ...

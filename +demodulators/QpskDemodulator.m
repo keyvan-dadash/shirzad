@@ -4,6 +4,12 @@ classdef QpskDemodulator < demodulators.AbstractDemodulator
             obj@demodulators.AbstractDemodulator(4, 'QPSK Demodulator');
         end
 
+        % --------- NEW: QPSK-specific symmetry rotations ----------
+        function G = getAmbiguityRotations(obj) %#ok<MANU>
+            % QPSK has 4-fold rotational symmetry → {1, -1, j, -j}
+            G = [1, -1, 1j, -1j];
+        end
+
         function bits = demodulateHard(obj, symbols)
             if isempty(symbols) % if symbols are empty then we are done
                 bits = zeros(0,1);
