@@ -14,7 +14,7 @@ assert(exist('dsp.UDPReceiver','class')==8, ...
   ['Install "DSP System Toolbox" for UDP/USRP support.']);
 
 %% ---------- User/link params (MUST MATCH TX) ----------
-fc              = 10e6;
+fc              = 9.8e6;
 MasterClockRate = 100e6;
 Decim           = 128;
 Fs              = MasterClockRate/Decim;
@@ -100,7 +100,7 @@ carSyncFine = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
     'DampingFactor',          0.707, ...
-    'NormalizedLoopBandwidth',0.01);
+    'NormalizedLoopBandwidth',0.7);
 
 carSyncNow = carSyncCoarse;
 useFine    = false;
@@ -192,14 +192,14 @@ while true
         continue;
     end
 
+    sa(xRaw);
+
     if isSuperCoarseReady && superCoarseFreq ~= 0
         N = numel(xRaw);
         n = (0:N-1).' + sampleIndex;   % global sample index
         xRaw = xRaw .* exp(-1j * 2*pi*superCoarseFreq/Fs .* n);
         sampleIndex = sampleIndex + N;
     end
-
-    % sa(xRaw);
 
     if ~isSuperCoarseReady
         coarseBuff = [coarseBuff; xRaw];
@@ -317,6 +317,7 @@ while true
 
         %% ---------- carrier/phase recovery ----------
         rxSyms_eq = carSyncNow.process(rxSyms_raw);
+        
         G    = [1, -1, 1j, -1j, 1];
         errs = zeros(1,4);
         for g = 1:4
@@ -328,7 +329,7 @@ while true
         [~, ig] = min(errs);
         rxSyms = rxSyms_eq * G(ig);
 
-        % constDiag(rxSyms);
+        constDiag(rxSyms);
 
         %% ---------- Es/N0 estimate ----------
         hb2 = qamDemBits(rxSyms);
@@ -391,10 +392,14 @@ while true
         payBits = dataBits;
         paySink.writeFrame(payBits, struct('FrameIndex', frames));
 
-        fprintf(['Summary: off=%d | M=%.3f | Pow=%.3g | ' ...
-                 'Es/N0≈%.1f dB | total time: %.3f | CFO_used≈%.1f Hz (%.3g rad/sym)\n'], ...
-                off, detRes.Metric, detRes.WindowPower, ...
-                SNRdB, toc(tStart), fCfoHz_use, wSym_use);
+        % fprintf(['Summary: off=%d | M=%.3f | Pow=%.3g | ' ...
+        %          'Es/N0≈%.1f dB | total time: %.3f | CFO_used≈%.1f Hz (%.3g rad/sym)\n'], ...
+        %         off, detRes.Metric, detRes.WindowPower, ...
+        %         SNRdB, toc(tStart), fCfoHz_use, wSym_use);
+
+        fprintf(['Summary: off=%d | M=%.3f | ' ...
+                 'CFO_used≈%.1f Hz (%.3g rad/sym)\n'], ...
+                off, detRes.Metric, fCfoHz_use, wSym_use);
 
         %% ---------- CFO tracking update ----------
         if detRes.Metric >= metricTrustThresh

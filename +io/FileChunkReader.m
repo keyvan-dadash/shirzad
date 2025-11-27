@@ -154,7 +154,7 @@ classdef FileChunkReader < io.Reader
             offLE      = typecast(uint32(obj.Offset), 'uint8');   % little-endian
             hdr(2:5)   = offLE(end:-1:1);                         % reverse => big-endian
     
-            fprintf('we are gonna print the offset of %.3f\n', obj.Offset);
+            % fprintf('we are gonna print the offset of %.3f\n', obj.Offset);
 
             % Bytes 6–9: Total size (uint32, big-endian)
             totLE      = typecast(uint32(obj.FileSize), 'uint8');

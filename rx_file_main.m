@@ -119,7 +119,7 @@ rfSrc = sources.SDRuBasebandSource( ...
 paySink = sinks.PayloadCollectorSink();
 
 fileId    = uint8(1);
-outFile   = 'U:\Chalmers\MCC125\codes\shirzad\halcs-net_3.zip';  % use local disk for speed if possible
+outFile   = 'U:\Chalmers\MCC125\codes\shirzad\test5.pdf';  % use local disk for speed if possible
 fileWriter = io.FileWriter(outFile);
 assembler  = filetransfer.FileAssembler(fileId, fileWriter);
 
@@ -130,10 +130,10 @@ assembler  = filetransfer.FileAssembler(fileId, fileWriter);
 %     'YLimits', [-2 2]);
 
 %% ---------- Debug flags ----------
-DEBUG_GENERAL = true;   % overall status, CFO, Es/N0, overrun messages
+DEBUG_GENERAL = false;   % overall status, CFO, Es/N0, overrun messages
 DEBUG_SYNC    = false;  % "No preamble" spam
-DEBUG_FILE    = true;   % file-chunk / assembler progress
-DEBUG_TIMING  = true;   % timing breakdown prints
+DEBUG_FILE    = false;   % file-chunk / assembler progress
+DEBUG_TIMING  = false;   % timing breakdown prints
 
 %% ---------- Buffers & counters ----------
 disp('RX: waiting for frames…');
@@ -180,6 +180,8 @@ timeCfo      = 0;   % symbol-rate CFO + preamble corr + Es/N0 estimate
 timePLL      = 0;   % carrier PLL + quadrant search
 
 readCalls    = 0;
+
+minOff = 10000000000;
 
 %% ================== MAIN RX LOOP ==================
 while true
@@ -477,9 +479,13 @@ while true
 
                     [offTot, tot, hasTotal, bufBytes] = assembler.status();
 
-                    if DEBUG_FILE
-                        fprintf('Chunk off=%u len=%d isLast=%d | written=%u, buffered=%u\n', ...
-                            meta.Offset, numel(chunkData), meta.IsLast, offTot, bufBytes);
+                    if meta.Offset < minOff
+                        minOff = meta.Offset;
+                    end
+
+                    if DEBUG_FILE || mod(frames,500) == 0
+                        fprintf('Chunk off=%u len=%d isLast=%d | written=%u, buffered=%u, minOff=%u\n', ...
+                            meta.Offset, numel(chunkData), meta.IsLast, offTot, bufBytes, minOff);
 
                         if hasTotal
                             fprintf('File progress: %d / %d bytes (%.1f%%), buffered=%d bytes\n', ...

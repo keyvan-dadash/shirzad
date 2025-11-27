@@ -73,7 +73,7 @@ preSyms     = [preSymsHalf; preSymsHalf];   % [a, a]
 txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
 
 %% ---------- Reader: FILE source ----------
-fileName = 'U:\Chalmers\MCC125\codes\shirzad\halcs-net.zip';  % file to send
+fileName = 'U:\Chalmers\MCC125\codes\shirzad\onsala.xlsx';  % file to send
 fileId   = uint8(1);
 
 % FileChunkReader will build payload bytes:
