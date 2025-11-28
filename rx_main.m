@@ -1,63 +1,73 @@
-% RX over USRP: QPSK with repeated-preamble detection [a,a]
+% RX over USRP: generic M-QAM / M-PSK link with:
 %   + Super-coarse CFO via FFT at sample-rate
 %   + Schmidl & Cox detector (repeated preamble [a,a])
 %   + CFO correction at SYMBOL RATE (1 sps, post-RRC)
-%   + PLL (decision-directed) for fine carrier/phase tracking
+%   + decision-directed PLL (DecisionDirectedCarrierSync)
 %   + decision-directed Es/N0 estimate
 %   + Convolutional FEC decode (rate 1/2, K=3, terminated)
 %   + Datagram decode handled by sinks.PayloadCollectorSink via io.Writer
 %
-%   payloadSyms = 512
+% Frame: [Preamble | Payload] where Payload is protocol.Payload.
 
 clear; clc;
 
 assert(exist('dsp.UDPReceiver','class')==8, ...
   ['Install "DSP System Toolbox" for UDP/USRP support.']);
 
-%% ---------- User/link params (MUST MATCH TX) ----------
-fc              = 9.8e6;        % NOTE: offset from TX for CFO testing
-MasterClockRate = 100e6;
-Decim           = 128;
+%% ---------- Load shared config ----------
+cfg = phyAppConfig();
+
+%% ---------- User/link params ----------
+fc              = cfg.Link.fcRx;
+MasterClockRate = cfg.Link.MasterClockRate;
+Decim           = cfg.Link.Decim;
 Fs              = MasterClockRate/Decim;
 
-M   = 4;  bps = log2(M);
-sps = 10; beta = 0.35; span = 10;
+sps  = cfg.Link.Sps;
+beta = cfg.Link.RrcBeta;
+span = cfg.Link.RrcSpan;
 
-preambleHalfLen = 128;
-payloadSyms     = 512;
-rxGain_dB       = 0;
+preambleHalfLen = cfg.Frame.PreambleHalfLen;
+payloadSyms     = cfg.Frame.PayloadSyms;
+rxGain_dB       = cfg.Link.RxGain_dB;
 
-SamplesPerFrame = 8000;
+SamplesPerFrame = cfg.Link.SamplesPerFrame;
 
 %% ---------- Mod / Demod ----------
-modQPSK = modulators.QpskModulator();
-demQPSK = demodulators.QpskDemodulator();
-qamDemBits = @(z) demQPSK.demodulateHard(z);
+mod = modulators.getMmodulator(cfg.Modulation.Name);
+dem = demodulators.getDemodulator(cfg.Modulation.Name);
+qamDemBits = @(z) dem.demodulateHard(z);
+
+M   = mod.M;
+bps = mod.BitsPerSymbol;
 
 %% ---------- FEC (rate 1/2, K=3, TERMINATED) ----------
 enc = fec.ConvEncoder.rateHalf_K3();   % only for layout consistency
 dec = fec.ViterbiDecoder.rateHalf_K3();
-K   = 3;
+K   = cfg.Fec.ConstraintLength;
 Kminus1 = K - 1;
 
 % FEC encode: used only to set up Payload layout (same as TX)
 fecEncodeFcn = @(dataBits) enc.encode(logical(dataBits), true);
 
 % FEC decode: prefer MEX if available, else MATLAB Viterbi
-if exist('fec.viterbi_k3_mex','file')
+if cfg.Fec.UseMexK3 && exist('fec.viterbi_k3_mex','file')
     fecDecodeFcn = @(codedBits) double(fec.viterbi_k3_mex(logical(codedBits)));
 else
     fecDecodeFcn = @(codedBits) dec.decode(double(codedBits));
 end
 
 %% ---------- Build Frame / Payload / Preamble ----------
-msgCapBytes   = 40;
-pilotBitsLen  = 100;
+msgCapBytes  = cfg.Frame.MsgCapBytes;
+pilotBitsLen = cfg.Frame.PilotBitsLen;
 
-pre = protocol.Preamble.fromMSequence(modQPSK, preambleHalfLen, ...
-                             'Degree', 9, 'Seed', 1001);
+pre = protocol.Preamble.fromMSequence( ...
+    mod, ...
+    preambleHalfLen, ...
+    'Degree', cfg.Frame.MseqDegree, ...
+    'Seed',   cfg.Frame.MseqSeed);
 
-pay = protocol.Payload(modQPSK, demQPSK, ...
+pay = protocol.Payload(mod, dem, ...
               payloadSyms, msgCapBytes, pilotBitsLen, ...
               fecEncodeFcn, fecDecodeFcn);
 
@@ -66,7 +76,7 @@ fr = protocol.Frame(pre, pay);
 preambleLen = fr.NumPreambleSymbols;
 frameSyms   = fr.NumFrameSymbols;
 
-% Consistency
+% Consistency check
 assert(preambleLen == 2*preambleHalfLen, 'RX: preambleLen mismatch.');
 
 % Sizes for convenience / logging
@@ -84,6 +94,8 @@ L_in = databitsLen + Kminus1;
 assert(codedBitsLen == 2*L_in, 'RX: codedBitsLen mismatch TX.');
 
 fprintf('RX protocol+FEC:\n');
+fprintf('  Modulation      : %s (M=%d, bps=%.1f)\n', ...
+    cfg.Modulation.Name, M, bps);
 fprintf('  datagram bytes  : %d (header=%d, payload<=%d)\n', ...
     msgCapBytes, hdrBytes, maxProtoPayload);
 fprintf('  databitsLen     : %d bits\n', databitsLen);
@@ -101,24 +113,24 @@ Rsym = Fs / sps;
 rrcDet = filters.RootRaisedCosineFilter(beta, span, sps);
 
 agc = gain.SimpleAgc( ...
-    'AveragingLength',    1000, ...
-    'MaximumGain_dB',     30, ...
-    'AdaptationStepSize', 1e-3, ...
-    'TargetPower',        1.0);
+    'AveragingLength',    cfg.Agc.AveragingLength, ...
+    'MaximumGain_dB',     cfg.Agc.MaximumGain_dB, ...
+    'AdaptationStepSize', cfg.Agc.AdaptationStepSize, ...
+    'TargetPower',        cfg.Agc.TargetPower);
 
-dcblock = filters.DcBlocker('Length',1024);
+dcblock = filters.DcBlocker('Length',2048);
 
 carSyncCoarse = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
-    'DampingFactor',          0.707, ...
-    'NormalizedLoopBandwidth',0.2);
+    'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
+    'NormalizedLoopBandwidth',cfg.CarrierSync.CoarseLoopBandwidthNorm);
 
 carSyncFine = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
-    'DampingFactor',          0.707, ...
-    'NormalizedLoopBandwidth',0.7);
+    'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
+    'NormalizedLoopBandwidth',cfg.CarrierSync.FineLoopBandwidthNorm);
 
 carSyncNow = carSyncCoarse;
 useFine    = false;
@@ -127,10 +139,10 @@ useFine    = false;
 preDet = sync.RepeatedPreambleDetector( ...
     'SamplesPerSymbol', sps, ...
     'PreambleHalfLen',  preambleHalfLen, ...
-    'MetricThreshold',  0.2, ...
-    'MinWindowPower',   1e-7);
+    'MetricThreshold',  cfg.PreambleDetector.MetricThreshold, ...
+    'MinWindowPower',   cfg.PreambleDetector.MinWindowPower);
 
-%% ---------- (Optional) FFT-based CFO estimator ----------
+%% ---------- (Optional) FFT-based CFO estimator (symbol-rate) ----------
 fftCfoEst = sync.FftCfoEstimator( ... %#ok<NASGU>
     'SampleRateSym', Rsym, ...
     'PreambleSyms',  preSyms, ...
@@ -139,13 +151,13 @@ fftCfoEst = sync.FftCfoEstimator( ... %#ok<NASGU>
 
 cfoInitialized     = false;
 fCfoHz_trk         = 0;
-cfoAlpha           = 0.05;
-cfoMaxJumpHz       = 200;
-metricTrustThresh  = 0.24;
+cfoAlpha           = cfg.Cfo.TrackAlpha;
+cfoMaxJumpHz       = cfg.Cfo.MaxJumpHz;
+metricTrustThresh  = cfg.Cfo.MetricTrustThreshold;
 
 %% ---------- Source & Sinks ----------
 rfSrc = sources.SDRuBasebandSource( ...
-      'IPAddress',        '192.168.10.4', ...
+      'IPAddress',        cfg.SDR.RxIPAddress, ...
       'CenterFrequency',  fc, ...
       'MasterClockRate',  MasterClockRate, ...
       'DecimationFactor', Decim, ...
@@ -153,15 +165,21 @@ rfSrc = sources.SDRuBasebandSource( ...
       'SamplesPerFrame',  SamplesPerFrame);
 
 % Datagram sink / demux
-paySink   = sinks.PayloadCollectorSink();
+paySink = sinks.PayloadCollectorSink();
 
-% Stream 0 -> console writer
-msgWriter = io.ConsoleWriter();
-paySink.registerWriter(uint8(0), msgWriter, 'CloseOnEnd', false);
+% Register writers from config
+for kW = 1:numel(cfg.Rx.StreamWriters)
+    spec = cfg.Rx.StreamWriters(kW);
+    closeOnEnd = true;
+    if isfield(spec, 'CloseOnEnd')
+        closeOnEnd = logical(spec.CloseOnEnd);
+    end
+    paySink.registerWriter(spec.StreamId, spec.Writer, 'CloseOnEnd', closeOnEnd);
+end
 
 constDiag = comm.ConstellationDiagram( ...
     'SamplesPerSymbol', 1, ...
-    'Name', 'RX Constellation (post-PLL, post-quadrant-fix)', ...
+    'Name', 'RX Constellation (post-PLL, post-phase-fix)', ...
     'XLimits', [-2 2], ...
     'YLimits', [-2 2]);
 
@@ -181,7 +199,7 @@ sa = spectrumAnalyzer('SampleRate',Fs, ...
     'Title','RX spectrum (post DC/AGC)');
 
 coarseBuff = [];
-buffLen = 16384;
+buffLen    = cfg.Cfo.SuperCoarseBuffLen;
 
 superCoarseFreq    = 0;
 isSuperCoarseReady = false;
@@ -202,7 +220,7 @@ while true
         return;   % for now, bail out on overrun
     end
 
-    sa(xRaw);
+    % sa(xRaw);
 
     %% ---------- Super-coarse CFO (sample-rate FFT) ----------
     if isSuperCoarseReady && superCoarseFreq ~= 0
@@ -218,12 +236,11 @@ while true
         if numel(coarseBuff) > buffLen
             XCfo = coarseBuff(1:buffLen);
 
-            w = hann(buffLen);
+            w          = hann(buffLen);
             fft_result = fftshift(fft(XCfo .* w));
 
-            [~, peak] = max(abs(fft_result));
-
-            peak_new = peak - (buffLen / 2 + 1);
+            [~, peak]  = max(abs(fft_result));
+            peak_new   = peak - (buffLen / 2 + 1);
 
             superCoarseFreq = peak_new * Fs / buffLen;
             fprintf('Super-coarse CFO ~ %.3f Hz (old/new bins %d/%d)\n', ...
@@ -267,8 +284,13 @@ while true
         detRes       = preDet.detectFast(yDetSearch);
 
         if ~detRes.Found
-            fprintf('No preamble: M=%.3f, Pow=%.3g\n', ...
-                detRes.Metric, detRes.WindowPower);
+            % fprintf('No preamble: M=%.3f, Pow=%.3g\n', ...
+            %     detRes.Metric, detRes.WindowPower);
+
+            dropSamples = min((searchSyms - preambleHalfLen) * sps, numel(xBuf));
+        
+            xBuf(1:dropSamples)    = [];
+            yDetBuf(1:dropSamples) = [];
             break;
         end
 
@@ -307,6 +329,15 @@ while true
         c       = abs(candPre' * preSyms) / (norm(candPre)*norm(preSyms) + eps);
         if c < 0.7
             fprintf('Low corr with real preamble (c=%.2f), waiting for more samples.\n', c);
+            lastFalseSym    = preStartSym + preambleLen + payloadSyms - 1;
+            lastFalseSym = min(lastFalseSym, searchSyms - preambleLen);
+            lastFalseSample = off + (lastFalseSym - 1) * sps;
+            dropSamples     = min(lastFalseSample, numel(xBuf));
+
+            fprintf('total size of buf: %d, and we are gonna drop %d\n', numel(xBuf), dropSamples);
+        
+            xBuf(1:dropSamples)    = [];
+            yDetBuf(1:dropSamples) = [];
             break;
         end
 
@@ -320,13 +351,15 @@ while true
         %% ---------- carrier/phase recovery ----------
         rxSyms_eq = carSyncNow.process(rxSyms_raw);
 
-        [rxSyms, rotIdx, rotErrs] = demQPSK.resolvePhaseAmbiguity(rxSyms_eq, pilotBits);
+        % Generic phase ambiguity resolver using pilot bits
+        [rxSyms, rotIdx, rotErrs] = dem.resolvePhaseAmbiguity(rxSyms_eq, pilotBits);
+        % fprintf('the error is: %3f\n', rotErrs);
 
-        constDiag(rxSyms);
+        % constDiag(rxSyms .* 10);
 
         %% ---------- Es/N0 estimate ----------
         hb2 = qamDemBits(rxSyms);
-        zh2 = modQPSK.modulate(hb2);
+        zh2 = mod.modulate(hb2);
         cHd = (zh2' * rxSyms) / (zh2' * zh2 + eps);
         err = rxSyms - cHd * zh2;
         Es  = mean(abs(cHd * zh2).^2);
@@ -342,9 +375,9 @@ while true
         %% ---------- Deliver datagram to PayloadCollectorSink ----------
         paySink.writeFrame(dataBytes, struct('FrameIndex', frames));
 
-        fprintf(['Summary: off=%d | M=%.3f | ' ...
-                 'Es/N0≈%.1f dB | CFO_used≈%.1f Hz (%.3g rad/sym)\n'], ...
-                off, detRes.Metric, SNRdB, fCfoHz_use, wSym_use);
+        % fprintf(['Summary: off=%d | M=%.3f | ' ...
+        %          'Es/N0≈%.1f dB | CFO_used≈%.1f Hz (%.3g rad/sym)\n'], ...
+        %         off, detRes.Metric, SNRdB, fCfoHz_use, wSym_use);
 
         %% ---------- CFO tracking update ----------
         if detRes.Metric >= metricTrustThresh
@@ -361,7 +394,7 @@ while true
         end
 
         %% ---------- tighten loops & freeze AGC ----------
-        if ~useFine && frames >= 15
+        if ~useFine && frames >= cfg.CarrierSync.SwitchToFineAfterFrames
             agc.AdaptationStepSize = 1e-9;
             carSyncNow = carSyncFine;
             useFine    = true;
