@@ -57,10 +57,8 @@ classdef TestConvEncoderViterbiDecoder < matlab.unittest.TestCase
         end
         
         function testViterbiInputLengthMustBeMultipleOfnOut(testCase)
-            % Bad-length input should cause *some* error; we don't rely on
-            % a specific error identifier, only on the message content.
             dec = fec.ViterbiDecoder.rateHalf_K3();
-            badV = [1 0 1];  % length 3, nOut=2 → invalid
+            badV = [1 0 1];  % length 3, nOut=2 -> invalid
             
             caught = false;
             try
