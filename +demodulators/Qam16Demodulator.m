@@ -6,7 +6,7 @@ classdef Qam16Demodulator < demodulators.AbstractDemodulator
             obj@demodulators.AbstractDemodulator(16, '16-QAM Demodulator');
         end
 
-        function G = getAmbiguityRotations(obj) %#ok<MANU>
+        function G = getAmbiguityRotations(obj)
             % 4-fold symmetry for rectangular QAM
             G = [1, -1, 1j, -1j];
         end
@@ -22,22 +22,30 @@ classdef Qam16Demodulator < demodulators.AbstractDemodulator
 
             % Undo normalization
             normFactor = sqrt(10);
-            s = z * normFactor;
-
-            I = real(s);
-            Q = imag(s);
+            s = z * normFactor;         % s ~ C * (I + jQ), I,Q E {-3,-1,+1,+3}
+        
+            P = mean(abs(s).^2);        % P ~ |C|^2 * 10
+            if P <= 0
+                bits = zeros(0,1);
+                return;
+            end
+            gainMag = sqrt(P / 10);     % ~ |C|
+        
+            sNorm = s / gainMag;        % ~ I + jQ at {-3,-1,+1,+3}
+        
+            I = real(sNorm);
+            Q = imag(sNorm);
 
             levels = [-3 -1 1 3];
 
-            % Nearest-neighbor quantization to 4-PAM
-            [~, idxI] = min(abs(I - levels.'), [], 2);   % 1..4
-            [~, idxQ] = min(abs(Q - levels.'), [], 2);
+            [~, idxI] = min(abs(I - levels), [], 2);   % I: N×1, levels: 1×4 -> N×4
+            [~, idxQ] = min(abs(Q - levels), [], 2);
 
             pamI = levels(idxI).';
             pamQ = levels(idxQ).';
 
-            bitsI = Qam16Demodulator.pamGray2bits(pamI(:));
-            bitsQ = Qam16Demodulator.pamGray2bits(pamQ(:));
+            bitsI = demodulators.Qam16Demodulator.pamGray2bits(pamI(:));
+            bitsQ = demodulators.Qam16Demodulator.pamGray2bits(pamQ(:));
 
             nSym    = numel(z);
             bitsMat = zeros(nSym, B);
@@ -67,8 +75,8 @@ classdef Qam16Demodulator < demodulators.AbstractDemodulator
             qBits   = bitsAll(:,1:2);
             iBits   = bitsAll(:,3:4);
 
-            I = Qam16Demodulator.bits2pamGray(iBits);
-            Q = Qam16Demodulator.bits2pamGray(qBits);
+            I = demodulators.Qam16Demodulator.bits2pamGray(iBits);
+            Q = demodulators.Qam16Demodulator.bits2pamGray(qBits);
 
             normFactor = sqrt(10);
             const = (I + 1j*Q) / normFactor;   % [16 x 1]

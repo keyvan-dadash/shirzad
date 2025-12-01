@@ -1,3 +1,4 @@
+% template function to get different qam
 function [demodulator] = getDemodulator(demodulatorName)
 
 demodulatorNameLower = lower(demodulatorName);

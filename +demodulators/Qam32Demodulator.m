@@ -6,8 +6,7 @@ classdef Qam32Demodulator < demodulators.AbstractDemodulator
             obj@demodulators.AbstractDemodulator(32, '32-QAM Demodulator');
         end
 
-        function G = getAmbiguityRotations(obj) %#ok<MANU>
-            % 4-fold symmetry (90-degree rotations)
+        function G = getAmbiguityRotations(obj)
             G = [1, -1, 1j, -1j];
         end
 
@@ -18,17 +17,26 @@ classdef Qam32Demodulator < demodulators.AbstractDemodulator
             end
 
             z = symbols(:);
-            B = obj.BitsPerSymbol;     % 5
-
+            B = obj.BitsPerSymbol; % 5
+            
             % Undo normalization
             normFactor = sqrt(26);
-            s = z * normFactor;
+            s = z * normFactor;         
 
-            I = real(s);
-            Q = imag(s);
+            P = mean(abs(s).^2);        
+            if P <= 0
+                bits = zeros(0,1);
+                return;
+            end
+            gainMag = sqrt(P / 26);
+        
+            sNorm = s / gainMag;        
+        
+            I = real(sNorm);
+            Q = imag(sNorm);
 
             % Quantize I to 8-PAM levels
-            Ilevels   = (-7:2:7).';     % [-7 -5 -3 -1 1 3 5 7]'
+            Ilevels   = (-7:2:7).';     
             [~, iIdx] = min(abs(I - Ilevels.'), [], 2);
             Iq        = Ilevels(iIdx).';
 
@@ -38,7 +46,7 @@ classdef Qam32Demodulator < demodulators.AbstractDemodulator
             Qq        = Qlevels(qIdx).';
 
             % I: natural 8-PAM => valI = (Iq+7)/2, then 3-bit binary
-            valI = uint8((Iq + 7)/2);
+            valI  = uint8((Iq + 7)/2);
             bitsI = de2bi(valI, 3, 'left-msb');   % [N x 3]
 
             % Q: Gray 4-PAM, same as 16-QAM

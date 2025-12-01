@@ -16,26 +16,13 @@ classdef (Abstract) AbstractDemodulator < handle
             obj.Name = char(name);
         end
 
-        function G = getAmbiguityRotations(obj) %#ok<INUSD>
-            %GETAMBIGUITYROTATIONS
-            % Default: no rotational ambiguity → single rotation 1+0j.
-            % Specific demodulators (QPSK, QAM, etc.) can override.
+        function G = getAmbiguityRotations(obj)
             G = 1;
         end
 
         function [rxSymsFixed, bestIdx, errs] = resolvePhaseAmbiguity(obj, rxSymsEq, pilotBits)
-            %RESOLVEPHASEAMBIGUITY Use known pilot bits to fix constellation
+            % Use known pilot bits to fix constellation
             % rotation ambiguity.
-            %
-            %   [rxSymsFixed, bestIdx, errs] = obj.resolvePhaseAmbiguity( ...
-            %       rxSymsEq, pilotBits)
-            %
-            % rxSymsEq : complex column (equalized symbols, including pilot part)
-            % pilotBits: known pilot bits (column vector 0/1)
-            %
-            % rxSymsFixed : rotated symbols after ambiguity resolution
-            % bestIdx     : index of best rotation in getAmbiguityRotations()
-            % errs        : vector of pilot bit error rates for each rotation
 
             if isempty(pilotBits) || isempty(rxSymsEq)
                 % Nothing to do
@@ -66,6 +53,16 @@ classdef (Abstract) AbstractDemodulator < handle
                     errs(g) = 1;      % no pilot bits => treat as worst
                 else
                     errs(g) = mean(rb(1:Kc) ~= pilotBits(1:Kc));
+                    % fprintf('------------------------Start %d %d %d %d-----------------------\n', g, numel(rb), numel(pilotBits), Kc);
+                    % for k = 1: 4 :Kc
+                    %     fprintf('%d %d %d %d | ', rb(k), rb(k+1), rb(k+2), rb(k+3));
+                    % end
+                    % fprintf('\n');
+                    % for k = 1: 4 :Kc
+                    %     fprintf('%d %d %d %d | ', pilotBits(k), pilotBits(k+1), pilotBits(k+2), pilotBits(k+3));
+                    % end
+                    % fprintf('\n');
+                    % fprintf('------------------------End   %d-----------------------\n', g);
                 end
             end
 
