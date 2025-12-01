@@ -1,17 +1,15 @@
 classdef Qam16Modulator < modulators.AbstractModulator
-    % 16-QAM modulator, Gray on each axis.
+    % 16-QAM modulator.
     %
     % Bits per symbol = 4:
     %   [b3 b2 b1 b0]
     %   Q uses [b3 b2], I uses [b1 b0]
     %
-    %   2-bit Gray to 4-PAM mapping (per axis):
+    %   2-bit to 4-PAM mapping (per axis):
     %       00 -> -3
     %       01 -> -1
     %       11 -> +1
     %       10 -> +3
-    %
-    % Normalization: Es_avg = 10 => divide by sqrt(10).
 
     methods
         function obj = Qam16Modulator()
@@ -39,10 +37,10 @@ classdef Qam16Modulator < modulators.AbstractModulator
             qBits = bitsMat(:,1:2);
             iBits = bitsMat(:,3:4);
 
-            I = Qam16Modulator.bits2pamGray(iBits);
-            Q = Qam16Modulator.bits2pamGray(qBits);
+            I = modulators.Qam16Modulator.bits2pamGray(iBits);
+            Q = modulators.Qam16Modulator.bits2pamGray(qBits);
 
-            % levels = [-3 -1 1 3]; mean(level^2) = 5 per axis => Es=10
+            % nomral factor for 16-qam
             normFactor = sqrt(10);
             symbols    = (I + 1j*Q) / normFactor;
         end
@@ -50,7 +48,6 @@ classdef Qam16Modulator < modulators.AbstractModulator
 
     methods (Static, Access = private)
         function pam = bits2pamGray(b2)
-            % b2: [N x 2], [MSB LSB], Gray mapping to 4-PAM
             if size(b2,2) ~= 2
                 error('Qam16Modulator:bits2pamGray', ...
                       'Input must have 2 columns of bits.');

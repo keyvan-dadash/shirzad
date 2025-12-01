@@ -3,13 +3,11 @@ classdef Qam32Modulator < modulators.AbstractModulator
     %
     % Bits per symbol = 5:
     %   [b4 b3 b2 b1 b0]
-    %   Q uses [b4 b3] (4-PAM, Gray)
-    %   I uses [b2 b1 b0] (8-PAM, natural)
+    %   Q uses [b4 b3] (4-PAM)
+    %   I uses [b2 b1 b0] (8-PAM)
     %
     % I-levels: -7 -5 -3 -1 1 3 5 7
-    % Q-levels: -3 -1 1 3 (Gray)
-    %
-    % Es_avg = 26 => normalization sqrt(26).
+    % Q-levels: -3 -1 1 3
 
     methods
         function obj = Qam32Modulator()
@@ -38,17 +36,17 @@ classdef Qam32Modulator < modulators.AbstractModulator
             qBits = bitsMat(:,1:2);
             iBits = bitsMat(:,3:5);
 
-            I = Qam32Modulator.bits3to8pam(iBits);
-            Q = Qam32Modulator.bits2to4pamGray(qBits);
+            I = modulators.Qam32Modulator.bits3to8pam(iBits);
+            Q = modulators.Qam32Modulator.bits2to4pamGray(qBits);
 
-            normFactor = sqrt(26);       % Es_avg = 21 + 5
+            normFactor = sqrt(26); % normal factor for 32-qam
             symbols    = (I + 1j*Q) / normFactor;
         end
     end
 
     methods (Static, Access = private)
         function pam = bits3to8pam(b3)
-            % Natural 8-PAM mapping:
+            % 8-PAM mapping:
             % val = 0..7 -> -7 + 2*val
             if size(b3,2) ~= 3
                 error('Qam32Modulator:bits3to8pam', ...
@@ -59,7 +57,6 @@ classdef Qam32Modulator < modulators.AbstractModulator
         end
 
         function pam = bits2to4pamGray(b2)
-            % Same Gray mapping as 16-QAM.
             if size(b2,2) ~= 2
                 error('Qam32Modulator:bits2to4pamGray', ...
                       'Input must have 2 columns of bits.');
