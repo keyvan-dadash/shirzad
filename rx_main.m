@@ -73,7 +73,7 @@ pay = protocol.Payload(mod, dem, ...
 
 fr = protocol.Frame(pre, pay);
 
-preambleLen = fr.NumPreambleSymbols;
+preambleLen = fr.NumPreambleSymbols;   % = 2 * preambleHalfLen
 frameSyms   = fr.NumFrameSymbols;
 
 % Consistency check
@@ -118,7 +118,7 @@ agc = gain.SimpleAgc( ...
     'AdaptationStepSize', cfg.Agc.AdaptationStepSize, ...
     'TargetPower',        cfg.Agc.TargetPower);
 
-dcblock = filters.DcBlocker('Length',2048);
+dcblock = filters.DcBlocker('Length',1024);
 
 carSyncCoarse = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
@@ -205,9 +205,17 @@ superCoarseFreq    = 0;
 isSuperCoarseReady = false;
 sampleIndex        = 0;
 
+candCache = struct( ...
+    'StartSample',{}, ...
+    'SampleOffset',{}, ...
+    'PreambleStartSym',{}, ...
+    'Metric',{}, ...
+    'WindowPower',{}, ...
+    'CfoRadPerSym',{});
+
 while true
     %% ---------- Pull chunk from source ----------
-    tStart = tic; %#ok<NASGU>
+    tStart = tic;
     [xRaw, srcInfo] = rfSrc.readFrame();
     if ~srcInfo.IsValid
         pause(0.05);
@@ -217,7 +225,7 @@ while true
     if srcInfo.Overrun
         fprintf('Overrun/short read (%d < %d), resetting RX state\n', ...
             numel(xRaw), SamplesPerFrame);
-        return;   % for now, bail out on overrun
+        return;
     end
 
     % sa(xRaw);
@@ -270,45 +278,71 @@ while true
         xBuf(1:extra)    = [];
         yDetBuf(1:extra) = [];
         fprintf('maxHoldSam chop: dropped %d old samples\n', extra);
+
+        % Adjust candidate cache for this chop
+        if ~isempty(candCache)
+            for kk = 1:numel(candCache)
+                candCache(kk).StartSample = candCache(kk).StartSample - extra;
+            end
+            mask = [candCache.StartSample] > 0;
+            candCache = candCache(mask);
+        end
     end
 
     %% ---------- INNER LOOP ----------
     while true
-        if numel(xBuf) < frameSam + 8*sps
+        % Need at least enough samples to ever contain a full frame
+        if numel(yDetBuf) < frameSam
             break;
         end
 
-        searchSyms   = frameSyms + 10;
-        maxDetectSam = searchSyms * sps;
-        yDetSearch   = yDetBuf(1 : min(numel(yDetBuf), maxDetectSam));
-        detRes       = preDet.detectFast(yDetSearch);
+        % --------- Step 1: ensure we have candidates in cache ---------
+        if isempty(candCache)
+            % Full-buffer detection (your design)
+            candCache = preDet.detectCandidates(yDetBuf);
 
-        if ~detRes.Found
-            % fprintf('No preamble: M=%.3f, Pow=%.3g\n', ...
-            %     detRes.Metric, detRes.WindowPower);
+            if isempty(candCache)
+                % No possible preamble anywhere in the buffer.
+                % Safe slide: keep only last Lpre symbols worth of samples.
+                keepSam     = Lpre * sps;
+                if numel(yDetBuf) <= keepSam
+                    break;  % wait for more samples
+                end
 
-            dropSamples = min((searchSyms - preambleHalfLen) * sps, numel(xBuf));
-        
-            xBuf(1:dropSamples)    = [];
-            yDetBuf(1:dropSamples) = [];
-            break;
+                dropSamples = numel(yDetBuf) - keepSam;
+                dropSamples = min(dropSamples, numel(xBuf));
+
+                xBuf(1:dropSamples)    = [];
+                yDetBuf(1:dropSamples) = [];
+
+                % No candidates to adjust (cache is empty).
+                continue;   % try again with new buffer head
+            end
         end
 
-        off         = detRes.SampleOffset;
-        preStartSym = detRes.PreambleStartSym;
-        wSym_sc     = detRes.CfoRadPerSym;      % rad/sym from Schmidl
+        % --------- Step 2: process earliest candidate in cache ---------
+        % Take earliest candidate (smallest StartSample)
+        [~, idxMin] = min([candCache.StartSample]);
+        cand        = candCache(idxMin);
+
+        off         = cand.SampleOffset;
+        preStartSym = cand.PreambleStartSym;
+        wSym_sc     = cand.CfoRadPerSym;
         fCfoHz_meas = wSym_sc * Rsym / (2*pi);
 
         % Symbol-rate stream from yDet
         ySymDet = yDetBuf(1+off : sps : end);
         NsymDet = numel(ySymDet);
 
+        % Ensure preamble fully inside symbol buffer
         if preStartSym + Lpre - 1 > NsymDet
+            % Not enough symbols yet (preamble crosses end of buffer)
             break;
         end
 
         payStartS = preStartSym + preambleLen;
         if payStartS + payloadSyms - 1 > NsymDet
+            % Payload not fully in buffer yet
             break;
         end
 
@@ -323,37 +357,43 @@ while true
         nSym     = (0:NsymDet-1).';
         ySym_cfo = ySymDet .* exp(-1j * wSym_use .* nSym);
 
-        % Validate preamble via correlation
+        % Validate preamble via correlation with known preamble
         preEndS = preStartSym + preambleLen - 1;
         candPre = ySym_cfo(preStartSym:preEndS);
-        c       = abs(candPre' * preSyms) / (norm(candPre)*norm(preSyms) + eps);
-        if c < 0.7
-            fprintf('Low corr with real preamble (c=%.2f), waiting for more samples.\n', c);
-            lastFalseSym    = preStartSym + preambleLen + payloadSyms - 1;
-            lastFalseSym = min(lastFalseSym, searchSyms - preambleLen);
-            lastFalseSample = off + (lastFalseSym - 1) * sps;
-            dropSamples     = min(lastFalseSample, numel(xBuf));
+        cCorr   = abs(candPre' * preSyms) / (norm(candPre)*norm(preSyms) + eps);
 
-            fprintf('total size of buf: %d, and we are gonna drop %d\n', numel(xBuf), dropSamples);
-        
+        if cCorr < 0.7
+            fprintf('Low corr with real preamble (c=%.2f), dropping false candidate.\n', cCorr);
+
+            % Drop exactly up to end of this (false) preamble
+            lastFalseSample = cand.StartSample + preambleLen*sps - 1;
+            dropSamples     = min(lastFalseSample, numel(yDetBuf));
+            dropSamples     = min(dropSamples, numel(xBuf));
+
             xBuf(1:dropSamples)    = [];
             yDetBuf(1:dropSamples) = [];
-            break;
+
+            % Adjust candidate cache
+            if ~isempty(candCache)
+                for kk = 1:numel(candCache)
+                    candCache(kk).StartSample = candCache(kk).StartSample - dropSamples;
+                end
+                mask = [candCache.StartSample] > 0;
+                candCache = candCache(mask);
+            end
+
+            continue;  % re-run with new buffer head (using updated cache)
         end
 
         %% ---------- extract payload symbols ----------
-        payEndS = payStartS + payloadSyms - 1;
-        if payEndS > numel(ySym_cfo)
-            break;
-        end
+        payEndS   = payStartS + payloadSyms - 1;
         rxSyms_raw = ySym_cfo(payStartS:payEndS);
 
         %% ---------- carrier/phase recovery ----------
         rxSyms_eq = carSyncNow.process(rxSyms_raw);
 
         % Generic phase ambiguity resolver using pilot bits
-        [rxSyms, rotIdx, rotErrs] = dem.resolvePhaseAmbiguity(rxSyms_eq, pilotBits);
-        % fprintf('the error is: %3f\n', rotErrs);
+        [rxSyms, rotIdx, rotErrs] = dem.resolvePhaseAmbiguity(rxSyms_eq, pilotBits); %#ok<NASGU>
 
         % constDiag(rxSyms .* 10);
 
@@ -373,14 +413,14 @@ while true
         % dataBytes: uint8 column, length = msgCapBytes (one datagram)
 
         %% ---------- Deliver datagram to PayloadCollectorSink ----------
-        paySink.writeFrame(dataBytes, struct('FrameIndex', frames));
+        % paySink.writeFrame(dataBytes, struct('FrameIndex', frames));
 
-        % fprintf(['Summary: off=%d | M=%.3f | ' ...
+        % fprintf(['Summary: M=%.3f | ' ...
         %          'Es/N0≈%.1f dB | CFO_used≈%.1f Hz (%.3g rad/sym)\n'], ...
-        %         off, detRes.Metric, SNRdB, fCfoHz_use, wSym_use);
+        %         cand.Metric, SNRdB, fCfoHz_use, wSym_use);
 
         %% ---------- CFO tracking update ----------
-        if detRes.Metric >= metricTrustThresh
+        if cand.Metric >= metricTrustThresh
             if ~cfoInitialized
                 fCfoHz_trk     = fCfoHz_meas;
                 cfoInitialized = true;
@@ -400,12 +440,25 @@ while true
             useFine    = true;
         end
 
-        %% ---------- drop consumed samples ----------
+        %% ---------- drop consumed samples (whole frame) ----------
+        % last symbol (payload end) in symbol index:
         lastSymIdx   = payStartS + payloadSyms - 1;
+        % sample index in yDetBuf (1-based):
         lastSampleIx = 1 + off + (lastSymIdx-1)*sps;
-        end_consumed = min(lastSampleIx, numel(xBuf));
 
-        xBuf(1:end_consumed)    = [];
-        yDetBuf(1:end_consumed) = [];
+        dropSamples = min(lastSampleIx, numel(yDetBuf));
+        dropSamples = min(dropSamples, numel(xBuf));
+
+        xBuf(1:dropSamples)    = [];
+        yDetBuf(1:dropSamples) = [];
+
+        % Adjust candidate cache: shift and remove consumed ones
+        if ~isempty(candCache)
+            for kk = 1:numel(candCache)
+                candCache(kk).StartSample = candCache(kk).StartSample - dropSamples;
+            end
+            mask = [candCache.StartSample] > 0;
+            candCache = candCache(mask);
+        end
     end
 end
