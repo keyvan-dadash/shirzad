@@ -3,33 +3,32 @@
 #include <cmath>
 #include <cfloat>
 #include <immintrin.h>
+#include <algorithm>
 
-static void createResultStruct(mxArray*& out,
-                               double metric,
-                               int sampleOffset,
-                               int preambleStartSym,
-                               double windowPower,
-                               double cfoRadPerSym,
-                               bool found)
+// Candidate struct to mirror MATLAB detectCandidates fields
+struct Candidate
+{
+    double startSample;      // StartSample (1-based, in samples)
+    int    sampleOffset;     // SampleOffset (0..sps-1)
+    int    preambleStartSym; // PreambleStartSym (1-based, in symbols)
+    double metric;           // M(d)
+    double windowPower;      // R(d)
+    double cfoRadPerSym;     // CFO estimate per symbol (rad/sym)
+};
+
+// Create an empty or filled struct array in MATLAB
+static mxArray* createCandidateStructArray(std::size_t n)
 {
     const char* fieldNames[] = {
-        "Metric",
+        "StartSample",
         "SampleOffset",
         "PreambleStartSym",
+        "Metric",
         "WindowPower",
-        "Found",
         "CfoRadPerSym"
     };
     constexpr int nFields = 6;
-
-    out = mxCreateStructMatrix(1, 1, nFields, fieldNames);
-
-    mxSetFieldByNumber(out, 0, 0, mxCreateDoubleScalar(metric));
-    mxSetFieldByNumber(out, 0, 1, mxCreateDoubleScalar(static_cast<double>(sampleOffset)));
-    mxSetFieldByNumber(out, 0, 2, mxCreateDoubleScalar(static_cast<double>(preambleStartSym)));
-    mxSetFieldByNumber(out, 0, 3, mxCreateDoubleScalar(windowPower));
-    mxSetFieldByNumber(out, 0, 4, mxCreateLogicalScalar(found));
-    mxSetFieldByNumber(out, 0, 5, mxCreateDoubleScalar(cfoRadPerSym));
+    return mxCreateStructMatrix(1, static_cast<mwSize>(n), nFields, fieldNames);
 }
 
 void mexFunction(int nlhs, mxArray* plhs[],
@@ -41,7 +40,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
     }
     if (nlhs > 1) {
         mexErrMsgIdAndTxt("schmidlCoxDetectMex:InvalidNumOutputs",
-                          "One output (struct) expected.");
+                          "One output (struct array) expected.");
     }
 
     const mxArray* y_in = prhs[0];
@@ -54,12 +53,12 @@ void mexFunction(int nlhs, mxArray* plhs[],
     const bool isComplex = mxIsComplex(y_in);
 
     mxComplexDouble* yc = nullptr;
-    double* yr = nullptr;
+    double*          yr = nullptr;
 
     if (isComplex) {
         yc = mxGetComplexDoubles(y_in);  // interleaved complex
     } else {
-        yr = mxGetDoubles(y_in);         // purely real
+        yr = mxGetDoubles(y_in);         // purely real, imag=0
     }
 
     int sps = static_cast<int>(mxGetScalar(prhs[1]));
@@ -72,31 +71,25 @@ void mexFunction(int nlhs, mxArray* plhs[],
                           "sps and Lh must be positive.");
     }
 
-    double bestMetric         = 0.0;
-    int    bestSampleOffset   = 0;
-    int    bestPreambleStart  = 0;  // 1-based
-    double bestWindowPower    = 0.0;
-    double bestCfoRadPerSym   = 0.0;
-    bool   found              = false;
-
+    // If no samples, immediately return empty struct array
     if (N == 0) {
-        createResultStruct(plhs[0],
-                           bestMetric,
-                           bestSampleOffset,
-                           bestPreambleStart,
-                           bestWindowPower,
-                           bestCfoRadPerSym,
-                           false);
+        plhs[0] = createCandidateStructArray(0);
         return;
     }
 
-    // Workspace; sizes adjusted per offset
+    const int Nint = static_cast<int>(N);
+    const int Lh2  = 2 * Lh;            // full preamble length in symbols
+    const double Lpre      = 2.0 * static_cast<double>(Lh);
+    const double maxSpan   = Lpre / 2.0; // grouping span in *samples* (Lpre/2)
+
+    // Workspaces reused for each offset
     std::vector<double> ySymRe;
     std::vector<double> ySymIm;
     std::vector<double> qRe, qIm;
     std::vector<double> pow;
     std::vector<double> PRe, PIm;
     std::vector<double> R;
+    std::vector<double> M;   // Metric per k
 
     ySymRe.reserve(N);
     ySymIm.reserve(N);
@@ -106,22 +99,24 @@ void mexFunction(int nlhs, mxArray* plhs[],
     PRe.reserve(N);
     PIm.reserve(N);
     R.reserve(N);
+    M.reserve(N);
 
-    const int Nint = static_cast<int>(N);
+    std::vector<Candidate> candRaw;
+    candRaw.reserve(64);
 
-    // Main Schmidl-Cox loop: over all sample offsets 0 .. sps-1
+    // Main Schmidl–Cox loop over sample offsets 0..sps-1
     for (int off = 0; off < sps; ++off) {
         if (off >= Nint) {
-            break;  // no more samples at this offset
+            break;
         }
 
-        // Ns = number of symbols at this offset
+        // Number of symbols at this offset
         int Ns = 1 + (Nint - 1 - off) / sps;
         if (Ns < (2 * Lh + 1)) {
             continue;
         }
 
-        const int Lwin = Ns - 2 * Lh;
+        int Lwin = Ns - 2 * Lh;   // number of positions for sliding window
         if (Lwin <= 0) {
             continue;
         }
@@ -129,9 +124,15 @@ void mexFunction(int nlhs, mxArray* plhs[],
         ySymRe.resize(Ns);
         ySymIm.resize(Ns);
 
+        // Downsample to symbol rate for this offset
         for (int n = 0, idx = off; n < Ns; ++n, idx += sps) {
-            ySymRe[n] = yc[idx].real;
-            ySymIm[n] = yc[idx].imag;
+            if (isComplex) {
+                ySymRe[n] = yc[idx].real;
+                ySymIm[n] = yc[idx].imag;
+            } else {
+                ySymRe[n] = yr[idx];
+                ySymIm[n] = 0.0;
+            }
         }
 
         const int Nq = Ns - Lh;
@@ -143,7 +144,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
         qIm.resize(Nq);
         pow.resize(Ns);
 
-        //  Compute q(n) = y(n)*conj(y(n+Lh)) and pow(n)=|y(n)|^2
+        // q(n) = y(n) * conj(y(n+Lh)), pow(n) = |y(n)|^2, with AVX where possible
         int n = 0;
         for (; n + 3 < Nq; n += 4) {
             __m256d ar = _mm256_loadu_pd(ySymRe.data() + n);
@@ -158,12 +159,11 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
             __m256d aibr = _mm256_mul_pd(ai, br);
             __m256d arbi = _mm256_mul_pd(ar, bi);
-            __m256d qi   = _mm256_sub_pd(aibr, arbi);  // qi = ai*br - ar*bi
+            __m256d qi   = _mm256_sub_pd(aibr, arbi);  // imag: ai*br - ar*bi
 
             _mm256_storeu_pd(qRe.data() + n, qr);
             _mm256_storeu_pd(qIm.data() + n, qi);
         }
-
         // tail for q
         for (; n < Nq; ++n) {
             double ar = ySymRe[n];
@@ -178,7 +178,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
             qIm[n] = qi;
         }
 
-        // pow
+        // pow(n) = |y(n)|^2
         n = 0;
         for (; n + 3 < Ns; n += 4) {
             __m256d ar = _mm256_loadu_pd(ySymRe.data() + n);
@@ -190,26 +190,22 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
             _mm256_storeu_pd(pow.data() + n, mag2);
         }
-
-        // tail for pow
         for (; n < Ns; ++n) {
             double ar = ySymRe[n];
             double ai = ySymIm[n];
-            pow[n] = ar * ar + ai * ai;
+            pow[n]    = ar * ar + ai * ai;
         }
 
-        const int Lh2 = 2 * Lh;
-
+        // Sliding sums for P(d) over q (length Lh) and R(d) over pow (length 2*Lh)
         PRe.resize(Lwin);
         PIm.resize(Lwin);
         R.resize(Lwin);
 
-        // Sliding sum for P(d) over q (length Lh)
+        // P(d) sliding sum
         __m256d sumPr_v = _mm256_setzero_pd();
         __m256d sumPi_v = _mm256_setzero_pd();
 
         int m = 0;
-
         for (; m + 3 < Lh; m += 4) {
             __m256d re = _mm256_loadu_pd(qRe.data() + m);
             __m256d im = _mm256_loadu_pd(qIm.data() + m);
@@ -259,8 +255,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
                 PIm[di] = sumPi;
             }
         }
-
-        // tail for sum
         for (; d < Lwin; ++d) {
             sumPr += qRe[d + Lh - 1] - qRe[d - 1];
             sumPi += qIm[d + Lh - 1] - qIm[d - 1];
@@ -269,20 +263,18 @@ void mexFunction(int nlhs, mxArray* plhs[],
             PIm[d] = sumPi;
         }
 
-        // Sliding sum for R(d) over pow (length 2*Lh)
+        // R(d) sliding sum over pow, length 2*Lh
         __m256d sumR_v = _mm256_setzero_pd();
         m = 0;
-
         for (; m + 3 < Lh2; m += 4) {
             __m256d v = _mm256_loadu_pd(pow.data() + m);
             sumR_v = _mm256_add_pd(sumR_v, v);
         }
 
-        double tmp[4];
-        _mm256_storeu_pd(tmp, sumR_v);
-        double sumR = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+        double tmpR[4];
+        _mm256_storeu_pd(tmpR, sumR_v);
+        double sumR = tmpR[0] + tmpR[1] + tmpR[2] + tmpR[3];
 
-        // tail for sum
         for (; m < Lh2; ++m) {
             sumR += pow[m];
         }
@@ -305,106 +297,141 @@ void mexFunction(int nlhs, mxArray* plhs[],
                 R[di] = sumR;
             }
         }
-
         for (; d < Lwin; ++d) {
             sumR += pow[d + Lh2 - 1] - pow[d - 1];
             R[d] = sumR;
         }
 
-        // Compute M(d) and track best candidate
-        int k = 0;
-
-        // Constants as vectors
-        __m256d eps_v          = _mm256_set1_pd(DBL_EPSILON);
-        __m256d minPower_v     = _mm256_set1_pd(minWindowPower);
-        __m256d metricThresh_v = _mm256_set1_pd(metricThreshold);
-        
-        // Process 4 k's at a time
-        for (; k + 3 < Lwin; k += 4) {
-            // Load R, PRe, PIm
-            __m256d Rv_v  = _mm256_loadu_pd(R.data()   + k);
-            __m256d Pr_v  = _mm256_loadu_pd(PRe.data() + k);
-            __m256d Pi_v  = _mm256_loadu_pd(PIm.data() + k);
-        
-            // magP2 = Pr*Pr + Pi*Pi
-            __m256d Pr2_v   = _mm256_mul_pd(Pr_v, Pr_v);
-            __m256d Pi2_v   = _mm256_mul_pd(Pi_v, Pi_v);
-            __m256d magP2_v = _mm256_add_pd(Pr2_v, Pi2_v);
-        
-            // denom = Rv*Rv + DBL_EPSILON
-            __m256d R2_v    = _mm256_mul_pd(Rv_v, Rv_v);
-            __m256d denom_v = _mm256_add_pd(R2_v, eps_v);
-        
-            // metric = magP2 / denom
-            __m256d metric_v = _mm256_div_pd(magP2_v, denom_v);
-        
-            // Store to temporaries so we can handle the branching scalarly
-            double Rv_arr[4];
-            double Pr_arr[4];
-            double Pi_arr[4];
-            double metric_arr[4];
-        
-            _mm256_storeu_pd(Rv_arr,     Rv_v);
-            _mm256_storeu_pd(Pr_arr,     Pr_v);
-            _mm256_storeu_pd(Pi_arr,     Pi_v);
-            _mm256_storeu_pd(metric_arr, metric_v);
-        
-            // Now handle 4 lanes one by one
-            for (int i = 0; i < 4; ++i) {
-                double Rv     = Rv_arr[i];
-                double metric = metric_arr[i];
-        
-                if (Rv <= minWindowPower) {
-                    continue;
-                }
-        
-                if (metric <= metricThreshold || metric <= bestMetric) {
-                    continue;
-                }
-        
-                double Pr = Pr_arr[i];
-                double Pi = Pi_arr[i];
-        
-                bestMetric        = metric;
-                bestWindowPower   = Rv;
-                bestSampleOffset  = off;
-                int idx           = k + i;
-                bestPreambleStart = idx + 1;
-                bestCfoRadPerSym  = std::atan2(Pi, Pr) / static_cast<double>(Lh);
-                found             = true;
-            }
-        }
-        
-        // Scalar tail for leftover k (if Lwin % 4 != 0)
-        for (; k < Lwin; ++k) {
+        // ----- Compute M(d) scalar and pick local maxima as candidates -----
+        M.resize(Lwin);
+        for (int k = 0; k < Lwin; ++k) {
             double Rv = R[k];
+            double Pr = PRe[k];
+            double Pi = PIm[k];
+
+            double magP2  = Pr * Pr + Pi * Pi;
+            double denom  = Rv * Rv + DBL_EPSILON;
+            M[k]          = magP2 / denom;
+        }
+
+        for (int k = 0; k < Lwin; ++k) {
+            double Rv     = R[k];
+            double metric = M[k];
+
             if (Rv <= minWindowPower) {
                 continue;
             }
-        
+            if (metric <= metricThreshold) {
+                continue;
+            }
+
+            // Local maxima condition: M(k) > M(k-1) and M(k) > M(k+1)
+            if (k > 0 && metric <= M[k - 1]) {
+                continue;
+            }
+            if (k < Lwin - 1 && metric <= M[k + 1]) {
+                continue;
+            }
+
             double Pr = PRe[k];
             double Pi = PIm[k];
-        
-            double magP2  = Pr * Pr + Pi * Pi;
-            double denom  = Rv * Rv + DBL_EPSILON;
-            double metric = magP2 / denom;
-        
-            if (metric > metricThreshold && metric > bestMetric) {
-                bestMetric        = metric;
-                bestWindowPower   = Rv;
-                bestSampleOffset  = off;
-                bestPreambleStart = k + 1;
-                bestCfoRadPerSym  = std::atan2(Pi, Pr) / static_cast<double>(Lh);
-                found             = true;
-            }
+
+            double phi         = std::atan2(Pi, Pr);
+            double cfoRadPerSym = phi / static_cast<double>(Lh);
+
+            // Convert (off, k) to absolute sample index (1-based) in y
+            double startSample = 1.0 + static_cast<double>(off) +
+                                 static_cast<double>(k) * static_cast<double>(sps);
+
+            Candidate c;
+            c.startSample      = startSample;
+            c.sampleOffset     = off;
+            c.preambleStartSym = k + 1;  // 1-based
+            c.metric           = metric;
+            c.windowPower      = Rv;
+            c.cfoRadPerSym     = cfoRadPerSym;
+
+            candRaw.push_back(c);
         }
     }
 
-    createResultStruct(plhs[0],
-                       bestMetric,
-                       bestSampleOffset,
-                       bestPreambleStart,
-                       bestWindowPower,
-                       bestCfoRadPerSym,
-                       found);
+    // ----- If no candidates, return empty struct -----
+    if (candRaw.empty()) {
+        plhs[0] = createCandidateStructArray(0);
+        return;
+    }
+
+    // ----- Sort candidates by StartSample (time order) -----
+    std::sort(candRaw.begin(), candRaw.end(),
+              [](const Candidate& a, const Candidate& b) {
+                  return a.startSample < b.startSample;
+              });
+
+    // ----- Merge nearby candidates (span <= Lpre/2 in samples) -----
+    std::vector<Candidate> candMerged;
+    candMerged.reserve(candRaw.size());
+
+    const int Ncand = static_cast<int>(candRaw.size());
+
+    int    groupStart = 0;
+    double dist       = 0.0;
+
+    for (int i = 1; i < Ncand; ++i) {
+        double gap = candRaw[i].startSample - candRaw[i - 1].startSample;
+
+        if (dist + gap <= maxSpan) {
+            // Still within same preamble plateau
+            dist += gap;
+        } else {
+            // Close group [groupStart .. i-1]
+            int bestIdx   = groupStart;
+            double bestM  = candRaw[groupStart].metric;
+            for (int j = groupStart + 1; j <= i - 1; ++j) {
+                if (candRaw[j].metric > bestM) {
+                    bestM   = candRaw[j].metric;
+                    bestIdx = j;
+                }
+            }
+            candMerged.push_back(candRaw[bestIdx]);
+
+            // Start new group at i
+            groupStart = i;
+            dist       = 0.0;
+        }
+    }
+
+    // Close last group [groupStart .. Ncand-1]
+    {
+        int bestIdx   = groupStart;
+        double bestM  = candRaw[groupStart].metric;
+        for (int j = groupStart + 1; j <= Ncand - 1; ++j) {
+            if (candRaw[j].metric > bestM) {
+                bestM   = candRaw[j].metric;
+                bestIdx = j;
+            }
+        }
+        candMerged.push_back(candRaw[bestIdx]);
+    }
+
+    // ----- Build MATLAB struct array -----
+    mxArray* out = createCandidateStructArray(candMerged.size());
+
+    for (mwSize i = 0; i < candMerged.size(); ++i) {
+        const Candidate& c = candMerged[i];
+
+        mxSetField(out, i, "StartSample",
+                   mxCreateDoubleScalar(c.startSample));
+        mxSetField(out, i, "SampleOffset",
+                   mxCreateDoubleScalar(static_cast<double>(c.sampleOffset)));
+        mxSetField(out, i, "PreambleStartSym",
+                   mxCreateDoubleScalar(static_cast<double>(c.preambleStartSym)));
+        mxSetField(out, i, "Metric",
+                   mxCreateDoubleScalar(c.metric));
+        mxSetField(out, i, "WindowPower",
+                   mxCreateDoubleScalar(c.windowPower));
+        mxSetField(out, i, "CfoRadPerSym",
+                   mxCreateDoubleScalar(c.cfoRadPerSym));
+    }
+
+    plhs[0] = out;
 }
