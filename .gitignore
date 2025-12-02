@@ -1,3 +1,6 @@
 *txt
 *zip
+*rar
 +fec/*.mexw64
++sync/*.mexw64
++sinks/*.mexw64
