@@ -1,5 +1,5 @@
 classdef TestDecisionDirectedCarrierSync < matlab.unittest.TestCase
-    % Tests for sync.DecisionDirectedCarrierSync
+    % Tests for sync.DecisionDirectedCarrierSync and sync.CPPDecisionDirectedCarrierSync
 
     methods (Test)
         function testQpskPhaseOffsetConvergence(testCase)
@@ -29,21 +29,34 @@ classdef TestDecisionDirectedCarrierSync < matlab.unittest.TestCase
                 'DampingFactor', 0.707, ...
                 'NormalizedLoopBandwidth', 0.01);
 
+            % Create synchronizer (coarse-ish loop bandwidth)
+            fastSyncObj = sync.CPPDecisionDirectedCarrierSync( ...
+                'ModulationOrder', 4, ...
+                'SamplesPerSymbol', 1, ...
+                'DampingFactor', 0.707, ...
+                'NormalizedLoopBandwidth', 0.01);
+
             y = syncObj.process(x);
+            fy = fastSyncObj.process(x);
 
             % Compare only after some symbols (warm up loop gains)
             skip = 200;
             s_use = s(skip+1:end);
             y_use = y(skip+1:end);
+            fy_use = fy(skip+1:end);
 
             % Phase error per symbol
             phaseErr = angle(y_use .* conj(s_use));  % should be around 0
+            fphaseErr = angle(fy_use .* conj(s_use));  % should be around 0
 
             % RMS phase error should be small
             rmsErr = sqrt(mean(phaseErr.^2));
+            frmsErr = sqrt(mean(fphaseErr.^2));
 
             testCase.verifyLessThan(rmsErr, 0.1, ...
                 'PLL did not remove constant phase offset.');
+            testCase.verifyLessThan(frmsErr, 0.1, ...
+                'Fast PLL did not remove constant phase offset.');
         end
 
         function testQpskSmallFrequencyOffsetConvergence(testCase)
@@ -74,19 +87,31 @@ classdef TestDecisionDirectedCarrierSync < matlab.unittest.TestCase
                 'SamplesPerSymbol', 1, ...
                 'DampingFactor', 0.707, ...
                 'NormalizedLoopBandwidth', 0.05);
+            fsyncObj = sync.CPPDecisionDirectedCarrierSync( ...
+                'ModulationOrder', 4, ...
+                'SamplesPerSymbol', 1, ...
+                'DampingFactor', 0.707, ...
+                'NormalizedLoopBandwidth', 0.05);
 
             y = syncObj.process(x);
+            fy = fsyncObj.process(x);
 
             % Ignore initial symbols (for warming up the loop gains)
             skip = 500;
             s_use = s(skip+1:end);
             y_use = y(skip+1:end);
+            fy_use = fy(skip+1:end);
 
             phaseErr = angle(y_use .* conj(s_use));
             rmsErr   = sqrt(mean(phaseErr.^2));
 
+            fphaseErr = angle(fy_use .* conj(s_use));
+            frmsErr   = sqrt(mean(fphaseErr.^2));
+
             testCase.verifyLessThan(rmsErr, 0.2, ...
                 'PLL did not track small frequency offset.');
+            testCase.verifyLessThan(frmsErr, 0.2, ...
+                'Fast PLL did not track small frequency offset.');
         end
 
         function testResetReproducibleOutput(testCase)
@@ -116,6 +141,8 @@ classdef TestDecisionDirectedCarrierSync < matlab.unittest.TestCase
                 'SamplesPerSymbol', 1, ...
                 'DampingFactor', 0.707, ...
                 'NormalizedLoopBandwidth', 0.01);
+            
+            % Fast pll does not have any reset functionality now (TODO)
 
             % First run
             syncObj.reset();
@@ -127,6 +154,37 @@ classdef TestDecisionDirectedCarrierSync < matlab.unittest.TestCase
 
             testCase.verifyLessThan(max(abs(y1 - y2)), 1e-12, ...
                 'Outputs differ between runs with reset and same input.');
+        end
+
+        function testPerformance16Qam(testCase)
+            M = 16;
+            N = 30000;
+            pll = sync.DecisionDirectedCarrierSync( ...
+                'ModulationOrder', M, ...
+                'NormalizedLoopBandwidth', 0.01);
+            fpll = sync.CPPDecisionDirectedCarrierSync( ...
+                'ModulationOrder', M, ...
+                'NormalizedLoopBandwidth', 0.01);
+
+            x = (randn(N,1) + 1j*randn(N,1))/sqrt(2);
+
+            Niter = 200;
+            t0 = tic;
+            for k = 1:Niter
+                y = pll.process(x);
+            end
+            tAvg = toc(t0)/Niter;
+
+            t1 = tic;
+            for k = 1:Niter
+                y = fpll.process(x);
+            end
+            tAvg1 = toc(t1)/Niter;
+
+            fprintf('MexDecisionDirectedCarrierSync (M=%d, N=%d): %.3f µs per call\n', ...
+                    M, N, 1e6*tAvg);
+            fprintf('FastDecisionDirectedCarrierSync (M=%d, N=%d): %.3f µs per call\n', ...
+                    M, N, 1e6*tAvg1);
         end
     end
 end
