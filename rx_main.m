@@ -218,9 +218,11 @@ prof = utils.EventProfiler();
 
 while true
     %% ---------- Pull chunk from source ----------
-    prof.start('readFrame');
+    % prof.start('readFrame');
     [xRaw, srcInfo] = rfSrc.readFrame();
-    prof.stop('readFrame');
+    % prof.stop('readFrame');
+
+    % prof.start('beforeProcess');
 
     % fprintf('new read\n');
     if ~srcInfo.IsValid
@@ -266,23 +268,28 @@ while true
         end
     end
 
+    % prof.stop('beforeProcess');
+
     %% ---------- DC blocker + AGC ----------
-    prof.start('dcblock');
+    % prof.start('dcblock');
     xDC = dcblock.process(xRaw);
-    prof.stop('dcblock');
+    % prof.stop('dcblock');
 
     if ~useFine
-        prof.start('agc');
+        % prof.start('agc');
         xAGC = agc.process(xDC);
-        prof.stop('agc');
+        % prof.stop('agc');
     else
         xAGC = xDC;
     end
 
     %% ---------- Detection path: RRC ----------
-    prof.start('rrc');
+    % prof.start('rrc');
     yDet = rrcDet.process(xAGC);
-    prof.stop('rrc');
+    % prof.stop('rrc');
+
+
+    % prof.start('append');
 
     xBuf    = [xBuf;    xAGC];
     yDetBuf = [yDetBuf; yDet];
@@ -294,6 +301,8 @@ while true
         fprintf('maxHoldSam chop: dropped %d old samples\n', extra);
     end
 
+    % prof.stop('append');
+
     %% ---------- Process all complete frames currently in yDetBuf ----------
     while true
         % Need at least enough samples to ever contain a full frame
@@ -302,9 +311,9 @@ while true
         end
 
         % Full-buffer multi-candidate Schmidl & Cox (C++), no cache
-        prof.start('preambleDetect');
+        % prof.start('preambleDetect');
         candList = preDet.detectCandidates(yDetBuf);
-        prof.stop('preambleDetect');
+        % prof.stop('preambleDetect');
 
         if isempty(candList)
             % No possible preamble anywhere in the buffer.
@@ -327,6 +336,7 @@ while true
         maxDropSamples = 0;
 
         for ic = 1:numel(candList)
+            % prof.start('frameProcess');
             cand        = candList(ic);
             off         = cand.SampleOffset;
             preStartSym = cand.PreambleStartSym;
@@ -348,8 +358,6 @@ while true
                 % (and any later one), leave it for next chunk.
                 break;
             end
-
-            prof.start('frameProcess');
 
             %% ---------- CFO from S&C + tracking ----------
             wSym_sc     = cand.CfoRadPerSym;
@@ -382,7 +390,7 @@ while true
 
             if cCorr < 0.7
                 % false alarm: skip this candidate but do NOT drop samples
-                prof.stop('frameProcess');
+                % prof.stop('frameProcess');
 
                 fprintf('Low corr with real preamble (c=%.2f), skipping candidate at StartSample=%d.\n', ...
                         cCorr, cand.StartSample);
@@ -393,14 +401,14 @@ while true
             rxSyms_raw = ySym_cfo(payStartS:payEndS);
 
             %% ---------- carrier/phase recovery ----------
-            prof.start('pll');
+            % prof.start('pll');
             rxSyms_eq = carSyncNow.process(rxSyms_raw);
-            prof.stop('pll');
+            % prof.stop('pll');
 
             % Generic phase ambiguity resolver using pilot bits
-            prof.start('phaseAmbig');
+            % prof.start('phaseAmbig');
             [rxSyms, rotIdx, rotErrs] = dem.resolvePhaseAmbiguity(rxSyms_eq, pilotBits); %#ok<NASGU>
-            prof.stop('phaseAmbig');
+            % prof.stop('phaseAmbig');
 
             % constDiag(rxSyms .* 10);
 
@@ -408,15 +416,15 @@ while true
 
             %% ---------- Payload decode: symbols -> coded bits ----------
             % t0 = tic;
-            prof.start('payloadDecode');
+            % prof.start('payloadDecode');
             [codedBits, payInfo] = fr.decodeFromPayload(rxSyms); %#ok<NASGU>
-            prof.stop('payloadDecode');
+            % prof.stop('payloadDecode');
             % fprintf('time is: %.4f\n', toc(t0));
             % codedBits: logical/double 0/1, length = codedBitsLen
 
-            prof.start('sink');
+            % prof.start('sink');
             paySink.writeFrame(codedBits, struct('FrameIndex', frames));
-            prof.stop('sink');
+            % prof.stop('sink');
 
             % Optional: log summary if you want
             % fprintf(['Summary: M=%.3f | ' ...
@@ -445,7 +453,7 @@ while true
             end
 
             % Done with this frame’s processing
-            prof.stop('frameProcess');
+            % prof.stop('frameProcess');
 
             %% ---------- track max consumed samples for this batch ----------
             % last symbol (payload end) in symbol index:
