@@ -14,7 +14,7 @@ classdef FileWriter < io.Writer
                 error('FileWriter requires a fileName.');
             end
             obj.FileName = fileName;
-            % Open for write, create or truncate
+            % Open for write
             [fid, msg] = fopen(fileName, 'w');
             if fid < 0
                 error('FileWriter:CannotOpen', ...
@@ -31,8 +31,6 @@ classdef FileWriter < io.Writer
         end
         
         function write(obj, data)
-            % write(obj, data)
-            % data: uint8 column (or convertible)
             if isempty(data)
                 return;
             end

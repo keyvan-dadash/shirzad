@@ -1,7 +1,6 @@
 classdef FileAssembler < handle
     % FileAssembler
     %   Reassembles a single file from out-of-order FileChunks.
-    %   Uses a Writer (typically io.FileWriter) to write in-order bytes.
     
     properties
         FileId     uint8
@@ -45,7 +44,8 @@ classdef FileAssembler < handle
                 return;
             end
             
-            % If it partially overlaps the already-written area, trim leading
+            % If it partially overlaps the already-written area, trim
+            % leading (good for redundancy)
             if offset < obj.NextOffset
                 trim = obj.NextOffset - offset;   % bytes to drop
                 data(1:double(trim)) = [];
@@ -80,6 +80,7 @@ classdef FileAssembler < handle
                     uint32(startOff), uint32(numel(data)));
                 
                 obj.Writer.write(data);
+                % Update the next offset
                 obj.NextOffset = obj.NextOffset + uint32(numel(data));
             end
         end
