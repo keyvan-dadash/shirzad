@@ -1,23 +1,4 @@
 classdef Frame < handle
-    %FRAME Represents one PHY frame: [preamble | payload].
-    %
-    %   Holds:
-    %       - Preamble (Preamble object)
-    %       - Payload  (Payload object)
-    %
-    %   TX:
-    %       [frameSyms, info] = fr.encode(dataBytes);
-    %
-    %   RX (assuming you've already done preamble detection,
-    %   CFO correction, and isolated the payload symbols):
-    %
-    %       [dataBytesHat, info] = fr.decodeFromPayload(rxPayloadSyms);
-    %
-    %   Or if you already have the full frame symbols with perfect
-    %   alignment (for testing):
-    %
-    %       [dataBytesHat, info] = fr.decodeFromFrame(rxFrameSyms);
-
     properties (SetAccess = immutable)
         Preamble
         Payload
@@ -40,7 +21,6 @@ classdef Frame < handle
             obj.Payload  = payloadObj;
         end
 
-        % ----- Dependent sizes -----
         function n = get.NumPreambleSymbols(obj)
             n = obj.Preamble.NumSymbols;
         end
@@ -53,13 +33,7 @@ classdef Frame < handle
             n = obj.NumPreambleSymbols + obj.NumPayloadSymbols;
         end
 
-        % ----- TX: bytes -> full frame symbols -----
         function [frameSyms, info] = encode(obj, dataBytes)
-            % [frameSyms, info] = encode(obj, dataBytes)
-            %
-            % dataBytes : uint8 (<= MsgCapBytes)
-            % frameSyms : [NumFrameSymbols x 1] complex
-
             [paySyms, payInfo] = obj.Payload.encode(dataBytes);
             frameSyms = [obj.Preamble.Symbols; paySyms];
 
@@ -70,13 +44,7 @@ classdef Frame < handle
             end
         end
 
-        % ----- RX: full frame symbols -> bytes (ideal alignment) -----
-        function [dataBytesHat, info] = decodeFromFrame(obj, rxFrameSyms)
-            % [dataBytesHat, info] = decodeFromFrame(obj, rxFrameSyms)
-            %
-            % *Testing* helper: assumes rxFrameSyms is perfectly aligned
-            % and already CFO/PLL corrected.
-
+        function [codedBits, info] = decodeFromFrame(obj, rxFrameSyms)
             rxFrameSyms = rxFrameSyms(:);
             if numel(rxFrameSyms) ~= obj.NumFrameSymbols
                 error('Frame:BadLen', ...
@@ -85,7 +53,7 @@ classdef Frame < handle
             end
 
             rxPayloadSyms = rxFrameSyms(obj.NumPreambleSymbols+1:end);
-            [dataBytesHat, payInfo] = obj.Payload.decode(rxPayloadSyms);
+            [codedBits, payInfo] = obj.Payload.decode(rxPayloadSyms);
 
             if nargout > 1
                 info = struct();
@@ -93,15 +61,8 @@ classdef Frame < handle
             end
         end
 
-        % ----- RX: only payload symbols -> bytes -----
-        function [dataBytesHat, info] = decodeFromPayload(obj, rxPayloadSyms)
-            % [dataBytesHat, info] = decodeFromPayload(obj, rxPayloadSyms)
-            %
-            % This is what you’ll use in your *real* RX, since the
-            % front-end already did preamble detection and sliced the
-            % payload for you.
-
-            [dataBytesHat, payInfo] = obj.Payload.decode(rxPayloadSyms);
+        function [codedBits, info] = decodeFromPayload(obj, rxPayloadSyms)
+            [codedBits, payInfo] = obj.Payload.decode(rxPayloadSyms);
 
             if nargout > 1
                 info = struct();
