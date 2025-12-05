@@ -10,49 +10,23 @@ classdef QpskDemodulator < demodulators.AbstractDemodulator
 
         function bits = demodulateHard(obj, symbols)
             if isempty(symbols)
-                bits = zeros(0,1);
+                bits = zeros(0,1,'logical');
                 return;
             end
 
             z = symbols(:);
-            s = z * sqrt(2);
 
-            I = real(s);
-            Q = imag(s);
+            I = real(z);
+            Q = imag(z);
 
-            b0 = double(I < 0); %LSB
-            b1 = double(Q < 0); %MSB
+            bI = I < 0;   % LSB (I)
+            bQ = Q < 0;   % MSB (Q)
 
-            bits = zeros(2*numel(z),1);
-            bits(1:2:end) = b1;
-            bits(2:2:end) = b0;
-        end
-
-        function llr = demodulateLlr(obj, symbols, noiseVarPerDim)
-            %Demodulate using log-likelihood
-
-            if isempty(symbols)
-                llr = zeros(0,1);
-                return;
-            end
-
-            if nargin < 3 || noiseVarPerDim <= 0
-                error('QpskDemodulator:NoiseVar', ...
-                      'noiseVarPerDim must be positive.');
-            end
-
-            z = symbols(:);
-            s = z * sqrt(2);
-
-            I = real(s);
-            Q = imag(s);
-
-            llr0 = -2 * I / noiseVarPerDim;   %LSB
-            llr1 = -2 * Q / noiseVarPerDim;   %MSB
-
-            llr = zeros(2*numel(z),1);
-            llr(1:2:end) = llr1;
-            llr(2:2:end) = llr0;
+            % Interleave [bQ bI] -> [bQ(1); bI(1); bQ(2); bI(2); ...]
+            nSym = numel(z);
+            bits = false(2*nSym,1);
+            bits(1:2:end) = bQ;
+            bits(2:2:end) = bI;
         end
     end
 end

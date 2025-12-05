@@ -1,6 +1,4 @@
 classdef Qam16Demodulator < demodulators.AbstractDemodulator
-    % 16-QAM Gray, matches Qam16Modulator.
-
     methods
         function obj = Qam16Demodulator()
             obj@demodulators.AbstractDemodulator(16, '16-QAM Demodulator');
@@ -22,23 +20,23 @@ classdef Qam16Demodulator < demodulators.AbstractDemodulator
 
             % Undo normalization
             normFactor = sqrt(10);
-            s = z * normFactor;         % s ~ C * (I + jQ), I,Q E {-3,-1,+1,+3}
+            s = z * normFactor;
         
-            P = mean(abs(s).^2);        % P ~ |C|^2 * 10
+            P = mean(abs(s).^2);
             if P <= 0
                 bits = zeros(0,1);
                 return;
             end
-            gainMag = sqrt(P / 10);     % ~ |C|
+            gainMag = sqrt(P / 10);
         
-            sNorm = s / gainMag;        % ~ I + jQ at {-3,-1,+1,+3}
+            sNorm = s / gainMag;
         
             I = real(sNorm);
             Q = imag(sNorm);
 
             levels = [-3 -1 1 3];
 
-            [~, idxI] = min(abs(I - levels), [], 2);   % I: N×1, levels: 1×4 -> N×4
+            [~, idxI] = min(abs(I - levels), [], 2);
             [~, idxQ] = min(abs(Q - levels), [], 2);
 
             pamI = levels(idxI).';
@@ -49,53 +47,10 @@ classdef Qam16Demodulator < demodulators.AbstractDemodulator
 
             nSym    = numel(z);
             bitsMat = zeros(nSym, B);
-            bitsMat(:,1:2) = bitsQ;     % Q -> [b3 b2]
-            bitsMat(:,3:4) = bitsI;     % I -> [b1 b0]
+            bitsMat(:,1:2) = bitsQ;
+            bitsMat(:,3:4) = bitsI;
 
             bits = reshape(bitsMat.', [], 1);
-        end
-
-        function llr = demodulateLlr(obj, symbols, noiseVarPerDim)
-            if isempty(symbols)
-                llr = zeros(0,1);
-                return;
-            end
-            if nargin < 3 || noiseVarPerDim <= 0
-                error('Qam16Demodulator:NoiseVar', ...
-                      'noiseVarPerDim must be positive.');
-            end
-
-            z = symbols(:);
-            nSym = numel(z);
-            B    = obj.BitsPerSymbol;   % 4
-            M    = obj.M;               % 16
-
-            % Build constellation + label table consistent with modulator
-            bitsAll = de2bi(0:M-1, B, 'left-msb');  % [16 x 4]
-            qBits   = bitsAll(:,1:2);
-            iBits   = bitsAll(:,3:4);
-
-            I = demodulators.Qam16Demodulator.bits2pamGray(iBits);
-            Q = demodulators.Qam16Demodulator.bits2pamGray(qBits);
-
-            normFactor = sqrt(10);
-            const = (I + 1j*Q) / normFactor;   % [16 x 1]
-
-            llr   = zeros(B*nSym,1);
-            invNv = 1 / noiseVarPerDim;
-
-            for n = 1:nSym
-                y  = z(n);
-                d2 = abs(y - const.').^2;      % 1 x 16
-
-                for bIx = 1:B
-                    idx0 = (bitsAll(:,bIx) == 0);
-                    idx1 = ~idx0;
-                    d0   = min(d2(idx0));
-                    d1   = min(d2(idx1));
-                    llr((n-1)*B + bIx) = (d1 - d0) * invNv;
-                end
-            end
         end
     end
 
@@ -114,30 +69,26 @@ classdef Qam16Demodulator < demodulators.AbstractDemodulator
         end
 
         function b2 = pamGray2bits(pam)
-            % Inverse of 4-PAM Gray mapping:
+            % Inverse of 4-PAM mapping:
             %   -3 -> 00
             %   -1 -> 01
             %   +1 -> 11
             %   +3 -> 10
+
             pam = pam(:);
             n   = numel(pam);
-            b2  = zeros(n, 2);
+        
+            idx = (pam + 3)/2 + 1;   % gives 1,2,3,4 for -3,-1,1,3
+        
+            lut = [0 0;
+                   0 1;
+                   1 1;
+                   1 0];
+        
+            % Vectorized lookup
+            b2 = lut(idx, :);
 
-            for k = 1:n
-                switch pam(k)
-                    case -3
-                        b2(k,:) = [0 0];
-                    case -1
-                        b2(k,:) = [0 1];
-                    case 1
-                        b2(k,:) = [1 1];
-                    case 3
-                        b2(k,:) = [1 0];
-                    otherwise
-                        error('Qam16Demodulator:pamGray2bits', ...
-                              'Invalid PAM level %g for 16-QAM.', pam(k));
-                end
-            end
+            b2 = double(b2);
         end
     end
 end

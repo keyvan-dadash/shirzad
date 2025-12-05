@@ -52,7 +52,17 @@ classdef (Abstract) AbstractDemodulator < handle
                 if Kc == 0
                     errs(g) = 1;      % no pilot bits => treat as worst
                 else
-                    errs(g) = mean(rb(1:Kc) ~= pilotBits(1:Kc));
+                    rbK     = rb(1:Kc);                % one slice
+                    pilotK  = pilotBits(1:Kc);         % one slice
+                    
+                    % Faster than 'mean'
+                    mismatches = 0;
+                    for k = 1:Kc
+                        if rbK(k) ~= pilotK(k)
+                            mismatches = mismatches + 1;
+                        end
+                    end
+                    errs(g) = mismatches / Kc;
                     % fprintf('------------------------Start %d %d %d %d-----------------------\n', g, numel(rb), numel(pilotBits), Kc);
                     % for k = 1: 4 :Kc
                     %     fprintf('%d %d %d %d | ', rb(k), rb(k+1), rb(k+2), rb(k+3));
@@ -73,6 +83,5 @@ classdef (Abstract) AbstractDemodulator < handle
 
     methods (Abstract)
         bits = demodulateHard(obj, symbols);
-        llr  = demodulateLlr(obj, symbols, noiseVarPerDim);
     end
 end
