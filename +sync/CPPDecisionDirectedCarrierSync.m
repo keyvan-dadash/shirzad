@@ -41,7 +41,7 @@ classdef CPPDecisionDirectedCarrierSync < handle
         end
 
         function y = process(obj, x)
-            [y, phaseOut, freqOut] = sync.decisionDirectedCarrierSyncMex( ...
+            [y, phaseOut, freqOut] = mex.decisionDirectedCarrierSyncMex( ...
                 x, obj.ModulationOrder, obj.Kp, obj.Ki, obj.phase, obj.freq);
             obj.phase = phaseOut;
             obj.freq  = freqOut;

@@ -16,7 +16,7 @@ classdef CPPQam16Demodulator < demodulators.AbstractDemodulator
                 return;
             end
 
-            bits = demodulators.qam16_demod_hard_mex(symbols);
+            bits = mex.qam16_demod_hard_mex(symbols);
         end
     end
 end

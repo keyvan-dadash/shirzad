@@ -31,19 +31,13 @@ classdef CppPayloadCollectorSink < sinks.AbstractSink
             % Small map to remember which stream has which worker type
             obj.WorkerTypes = containers.Map('KeyType','double', 'ValueType','char');
 
-            % We should make sure mex exists
-            if exist('utils.payload_worker_mex','file') ~= 3
-                error('CppPayloadCollectorSink:MissingMex', ...
-                      'utils.payload_worker_mex MEX not found on path.');
-            end
-
             % Initialise C++ backend
-            utils.payload_worker_mex('init', obj.NumThreads);
+            mex.payload_worker_mex('init', obj.NumThreads);
         end
 
         function delete(obj)
             try
-                utils.payload_worker_mex('shutdown');
+                mex.payload_worker_mex('shutdown');
             catch
                 % ignore
             end
@@ -76,7 +70,7 @@ classdef CppPayloadCollectorSink < sinks.AbstractSink
                 end
             end
 
-            utils.payload_worker_mex('add_worker', sid, workerType);
+            mex.payload_worker_mex('add_worker', sid, workerType);
 
             % Record locally (later)
             obj.WorkerTypes(sid) = workerType;
@@ -87,7 +81,7 @@ classdef CppPayloadCollectorSink < sinks.AbstractSink
 
             % Remove from C++ backend
             try
-                utils.payload_worker_mex('remove_worker', sid);
+                mex.payload_worker_mex('remove_worker', sid);
             catch ME
                 warning('CppPayloadCollectorSink:RemoveWorkerError', ...
                         'Error removing worker for stream %d: %s', ...
@@ -127,7 +121,7 @@ classdef CppPayloadCollectorSink < sinks.AbstractSink
             end
 
             % Forward to C++ backend (blocking queue, should we change?)
-            utils.payload_worker_mex('enqueue', dataBytes);
+            mex.payload_worker_mex('enqueue', dataBytes);
         end
 
         function bits = concatenateAll(obj)
@@ -151,7 +145,7 @@ classdef CppPayloadCollectorSink < sinks.AbstractSink
 
         function release(obj)
             try
-                utils.payload_worker_mex('shutdown');
+                mex.payload_worker_mex('shutdown');
             catch
                 % ignore
             end
