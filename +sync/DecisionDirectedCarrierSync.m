@@ -2,15 +2,15 @@ classdef DecisionDirectedCarrierSync < handle
     %DECISIONDIRECTEDCARRIERSYNC Simple decision-directed carrier/phase PLL.
 
     properties
-        ModulationOrder        (1,1) double {mustBePositive, mustBeInteger} = 4
-        SamplesPerSymbol       (1,1) double {mustBePositive} = 1
-        DampingFactor          (1,1) double {mustBePositive} = 0.707
-        NormalizedLoopBandwidth(1,1) double {mustBePositive} = 0.01
+        ModulationOrder        (1,1) double  = 4
+        SamplesPerSymbol       (1,1) double  = 1
+        DampingFactor          (1,1) double = 0.707
+        NormalizedLoopBandwidth(1,1) double = 0.01
+        phase   (1,1) double = 0;   % current phase
+        freq    (1,1) double = 0;   % current frequency
     end
 
     properties (Access = private)
-        phase   (1,1) double = 0;   % current phase
-        freq    (1,1) double = 0;   % current frequency
         Kp      (1,1) double = 0;   % proportional gain
         Ki      (1,1) double = 0;   % integral gain
     end
@@ -35,9 +35,9 @@ classdef DecisionDirectedCarrierSync < handle
             obj.configureLoopGains();
         end
 
-        function reset(obj)
-            obj.phase = 0;
-            obj.freq  = 0;
+        function reset(obj, phase, freq)
+            obj.phase = phase;
+            obj.freq  = freq;
         end
 
         function y = process(obj, x)
@@ -67,6 +67,8 @@ classdef DecisionDirectedCarrierSync < handle
                 obj.freq  = obj.freq  + obj.Ki * e_k;
                 obj.phase = obj.phase + obj.freq + obj.Kp * e_k;
             end
+
+            % fprintf('freq is %.3f and phase is %.3f\n', obj.freq, obj.phase);
         end
     end
 

@@ -176,6 +176,7 @@ classdef TestDecisionDirectedCarrierSync < matlab.unittest.TestCase
             tAvg = toc(t0)/Niter;
 
             t1 = tic;
+            x = single(x);
             for k = 1:Niter
                 y = fpll.process(x);
             end

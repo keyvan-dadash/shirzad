@@ -37,7 +37,7 @@ classdef TestRepeatedPreambleDetector < matlab.unittest.TestCase
             NsymAfter   = 20;
             ySym = [zeros(NsymBefore,1); pre; zeros(NsymAfter,1)];
 
-            y = ySym;  % sps=1
+            y = single(ySym);  % sps=1
 
             for k = 1:numel(detections)
                 d   = detections{k};
@@ -101,6 +101,8 @@ classdef TestRepeatedPreambleDetector < matlab.unittest.TestCase
                 y(idx) = ySymAll(k);
             end
 
+            y = single(y);
+
             for k = 1:numel(detections)
                 d   = detections{k};
                 res = d.detect(y);
@@ -145,6 +147,7 @@ classdef TestRepeatedPreambleDetector < matlab.unittest.TestCase
             N     = 5000;
             noise = (randn(N,1) + 1j*randn(N,1))/sqrt(2);
 
+            noise = single(noise);
             for k = 1:numel(detections)
                 d   = detections{k};
                 res = d.detect(noise);
@@ -199,6 +202,7 @@ classdef TestRepeatedPreambleDetector < matlab.unittest.TestCase
                 y(idx) = ySym(k);
             end
 
+            y = single(y);
             % Original (slow) detector
             tTotal = 0;
             for k = 1:200
@@ -306,6 +310,7 @@ classdef TestRepeatedPreambleDetector < matlab.unittest.TestCase
                 y(idx) = ySym(k);
             end
 
+            y = single(y);
             candFast = cdet.detectCandidates(y);
             candCpp  = cppcdet.detectCandidates(y);
 
