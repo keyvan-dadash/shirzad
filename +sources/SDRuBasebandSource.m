@@ -58,31 +58,32 @@ classdef SDRuBasebandSource < sources.AbstractSource
             obj.createRxObj();
         end
 
-        function [frame, info] = readFrame(obj)
-            if isempty(obj.RxObj)
-                error('SDRuBasebandSource:NotInitialized', ...
-                      'Receiver object has not been created.');
-            end
+        function [x, len, over] = readFrame(obj)
+            % if isempty(obj.RxObj)
+            %     error('SDRuBasebandSource:NotInitialized', ...
+            %           'Receiver object has not been created.');
+            % end
 
             % comm.SDRuReceiver can return [data,len,overrun]
+            % simplify to get higher performance
             [x, len, over] = obj.RxObj();
 
 
-            if len > 0
-                frame = x(1:len, :);
-                obj.FrameIndex = obj.FrameIndex + 1;
-                isValid = true;
-            else
-                frame   = complex([]);
-                isValid = false;
-            end
-
-            info = struct( ...
-                'IsValid',    isValid, ...
-                'NumSamples', len, ...
-                'Overrun',    logical(over), ...
-                'CenterFreq', obj.CenterFrequency, ...
-                'FrameIndex', obj.FrameIndex);
+            % if len > 0
+            %     frame = x(1:len, :);
+            %     obj.FrameIndex = obj.FrameIndex + 1;
+            %     isValid = true;
+            % else
+            %     frame   = complex([]);
+            %     isValid = false;
+            % end
+            % 
+            % info = struct( ...
+            %     'IsValid',    isValid, ...
+            %     'NumSamples', len, ...
+            %     'Overrun',    logical(over), ...
+            %     'CenterFreq', obj.CenterFrequency, ...
+            %     'FrameIndex', obj.FrameIndex);
         end
 
         function reset(obj)
