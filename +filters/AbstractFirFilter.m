@@ -14,7 +14,7 @@ classdef (Abstract) AbstractFirFilter < handle
         function obj = AbstractFirFilter(b, name)
             b = b(:).';                    % ensure row vector
             obj.Coefficients = b;
-            obj.State        = zeros(numel(b)-1,1);
+            obj.State        = zeros(numel(b)-1,1,'like',b); % make it either double or single
             obj.Name = name;
         end
 

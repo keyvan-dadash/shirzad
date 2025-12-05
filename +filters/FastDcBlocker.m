@@ -2,23 +2,23 @@ classdef FastDcBlocker < handle
     % Fast DC blocker using exponential running-average subtraction.
 
     properties
-        Length (1,1) double {mustBePositive} = 64;
+        Length (1,1) single {mustBePositive} = 64;
     end
 
     properties (Access = private)
-        alpha     (1,1) double = 1/64;   % smoothing factor
-        meanState (1,1) double = 0;      % complex DC estimate
+        alpha     (1,1) single = 1/64;   % smoothing factor
+        meanState (1,1) single = 0;      % complex DC estimate
     end
 
     methods
         function obj = FastDcBlocker(varargin)
             if ~isempty(varargin)
                 p = inputParser;
-                addParameter(p,'Length',obj.Length, ...
-                    @(x)isnumeric(x)&&isscalar(x)&&x>0);
+                addParameter(p,'Length',obj.Length);
                 parse(p, varargin{:});
                 obj.Length = p.Results.Length;
             end
+
             obj.alpha = 1 / obj.Length;
             obj.reset();
         end

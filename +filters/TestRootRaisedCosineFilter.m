@@ -126,5 +126,40 @@ classdef TestRootRaisedCosineFilter < matlab.unittest.TestCase
                 max(abs(yFullL - yCatL)), 1e-12, ...
                 'Streaming vs one-shot processing differs for RRC filter.');
         end
+
+        function testPerformanceLargeInput(testCase)
+            % Measure runtime of RRC filter for large inputs.
+            % We test sps = 4 and 8 with 30000 samples and print
+            % the elapsed time in microseconds.
+
+            beta = 0.35;
+            span = 10;
+            spsList = [4 8];
+            N = 30000;
+
+            x = randn(N, 1);
+
+            % Make sure it is single
+            x = single(x);
+
+            for sps = spsList
+                rrc = filters.RootRaisedCosineFilter(beta, span, sps, false);
+
+                % Make sure state is clean
+                rrc.reset();
+
+                tStart = tic;
+                y = rrc.process(x);
+                elapsed = toc(tStart);           % seconds
+                us = elapsed * 1e6;              % microseconds
+
+                fprintf(['RootRaisedCosineFilter: sps = %d, N = %d -> ' ...
+                         '%.3f us (%.3f ms)\n'], ...
+                        sps, N, us, elapsed * 1e3);
+
+                testCase.verifyEqual(numel(y), N, ...
+                    sprintf('Unexpected output length for sps = %d', sps));
+            end
+        end
     end
 end

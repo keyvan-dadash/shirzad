@@ -69,6 +69,9 @@ classdef DcBlockerTest < matlab.unittest.TestCase
     
             N = 30000;
             x = randn(N,1) + 1j*randn(N,1);
+
+            % Use single to speed up the benchmark
+            x = single(x);
     
             Niter = 200;
             t0 = tic;
