@@ -9,8 +9,8 @@ classdef SimpleAgc < handle
     end
 
     properties (Access = private)
-        avgPower   (1,1) double = 1.0;   % smoothed power estimate
-        gainLinear (1,1) double = 1.0;   % current applied linear gain
+        avgPower   (1,1) single = 1.0;   % smoothed power estimate
+        gainLinear (1,1) single = 1.0;   % current applied linear gain
     end
 
     methods
