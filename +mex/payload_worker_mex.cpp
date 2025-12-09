@@ -17,6 +17,7 @@
 #include "include/payload_worker_common.hpp"
 #include "include/datagram_parser.hpp"
 #include "include/decoders/viterbit_k3_decoder.h"
+#include "include/decoders/viterbi_k3_7_8_decode.h"
 #include "include/utils.hpp"
 
 #define likely(x)      __builtin_expect(!!(x), 1)
@@ -55,7 +56,11 @@ static void workerLoop(int workerID)
             codedBits[i] = (job.bytes[i] != 0) ? 1 : 0;
         }
 
+#ifndef K7
         std::vector<std::uint8_t> infoBits  = viterbi_k3_decode(codedBits);
+#else
+        std::vector<std::uint8_t> infoBits  = viterbi_k3_7_8_decode(codedBits);
+#endif /* K7 */
         std::vector<std::uint8_t> dataBytes = bitsToBytesMSB(infoBits);
 
         // Descramble the data (by scrambling again)

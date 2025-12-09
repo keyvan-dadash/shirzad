@@ -8,3 +8,5 @@
 #define SH_USE_AVX
 // #define SH_USE_SSE
 // #define SH_USE_SCALAR
+
+//#define K7
