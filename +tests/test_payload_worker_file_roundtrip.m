@@ -3,11 +3,9 @@ function test_payload_worker_file_roundtrip()
     import fec.ConvEncoder
     import io.FileChunkReader
 
-    % some test files
     inFile  = fullfile(pwd, 'payload_worker_in.bin');
     outFile = fullfile(pwd, 'file_1');
 
-    % Clean up files + shutdown backend on exit
     cleanupObj = onCleanup(@() cleanup(inFile, outFile));
 
     data = uint8(mod(0:9999, 256));
@@ -16,8 +14,8 @@ function test_payload_worker_file_roundtrip()
     fwrite(fid, data, 'uint8');
     fclose(fid);
 
-    sinks.payload_worker_mex('init', 2);
-    sinks.payload_worker_mex('add_worker', 2, 'file');
+    mex.payload_worker_mex('init', 2);
+    mex.payload_worker_mex('add_worker', 2, 'file');
 
     maxDataBytes = 256;
     fileId       = uint8(1);
@@ -25,8 +23,13 @@ function test_payload_worker_file_roundtrip()
     reader = FileChunkReader(inFile, fileId, maxDataBytes, false);
 
     enc = ConvEncoder.rateHalf_K3();
+    fecEncodeFcn = @(dataBits) fec.puncture78_k3(enc.encode(logical(dataBits), true));
 
     streamId = uint8(2);
+
+    scrSeedBits = logical([ ...
+        1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 ...
+    ]);
 
     while true
         maxPayloadBytes = 255;
@@ -39,6 +42,7 @@ function test_payload_worker_file_roundtrip()
         dg = Datagram(streamId, miniPayload);
 
         dgBytes = dg.toBytes();
+        dgBytes = scrambler.scrambleBytes(dgBytes, scrSeedBits);
 
         bitsMat  = de2bi(dgBytes, 8, 'left-msb');
         infoBits = bitsMat.';
@@ -46,10 +50,11 @@ function test_payload_worker_file_roundtrip()
         infoBits = double(infoBits ~= 0);
 
         enc.reset();
-        codedBits = enc.encode(infoBits, true);
+        % codedBits = enc.encode(infoBits, true);
+        codedBits = fecEncodeFcn(infoBits);
         codedBits_u8 = uint8(codedBits(:) ~= 0);
 
-        sinks.payload_worker_mex('enqueue', codedBits_u8);
+        mex.payload_worker_mex('enqueue', codedBits_u8);
 
         if eof
             break;
@@ -83,11 +88,10 @@ end
 
 function cleanup(inFile, outFile)
     try
-        sinks.payload_worker_mex('shutdown');
+        mex.payload_worker_mex('shutdown');
     catch
     end
 
-    % Remove test files
     if exist(inFile, 'file') == 2
         delete(inFile);
     end
