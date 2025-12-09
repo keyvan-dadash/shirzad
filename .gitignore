@@ -5,6 +5,6 @@
 +sync/*.mexw64
 +sinks/*.mexw64
 *.jpg
-+mex/*mexw64
++mex/*.mexw64
 *pdf
 *bin
