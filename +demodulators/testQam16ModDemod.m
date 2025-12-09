@@ -2,7 +2,7 @@ classdef testQam16ModDemod < matlab.unittest.TestCase
     methods (Test)
         function testSymbolMappingTable(testCase)
             mod = modulators.Qam16Modulator();
-            dem = demodulators.Qam16Demodulator();
+            dem = demodulators.CPPQam16Demodulator();
 
             B = mod.BitsPerSymbol;
 
@@ -11,6 +11,7 @@ classdef testQam16ModDemod < matlab.unittest.TestCase
             bitsIn  = bitsIn(:);
 
             syms = mod.modulate(bitsIn);
+            syms = single(syms);
 
             symsUnique = unique(syms);
             testCase.verifyEqual(numel(symsUnique), 16, ...
@@ -46,7 +47,7 @@ classdef testQam16ModDemod < matlab.unittest.TestCase
 
         function testRandomRoundTripNoNoise(testCase)
             mod = modulators.Qam16Modulator();
-            dem = demodulators.Qam16Demodulator();
+            dem = demodulators.CPPQam16Demodulator();
 
             B = mod.BitsPerSymbol;
             Nsym = 1000;
@@ -54,6 +55,7 @@ classdef testQam16ModDemod < matlab.unittest.TestCase
             bitsIn = randi([0 1], Nsym * B, 1);
 
             syms   = mod.modulate(bitsIn);
+            syms = single(syms);
             bitsOut = dem.demodulateHard(syms);
 
             testCase.verifyEqual(bitsOut, bitsIn, ...
@@ -62,13 +64,15 @@ classdef testQam16ModDemod < matlab.unittest.TestCase
 
         function testResolvePhaseAmbiguityNoNoise(testCase)
             mod = modulators.Qam16Modulator();
-            dem = demodulators.Qam16Demodulator();
+            dem = demodulators.CPPQam16Demodulator();
 
             B    = mod.BitsPerSymbol;
             Nsym = 200;  % number of symbols in this "frame"
 
             bitsIn = randi([0 1], Nsym * B, 1);
             syms   = mod.modulate(bitsIn);
+
+            syms = single(syms);
 
             % Use first part of bits as pilot bits
             pilotBitsLen = 60;
