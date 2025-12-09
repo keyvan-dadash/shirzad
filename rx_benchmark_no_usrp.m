@@ -126,8 +126,8 @@ txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
 
 frameSamUp = frameSyms * sps;   % samples per TX frame
 
-NframesGen   = 8000;   % total TX frames generated offline
-framesTarget = 7000;   % frames to decode for RX benchmark
+NframesGen   = 5000;   % total TX frames generated offline
+framesTarget = 4000;   % frames to decode for RX benchmark
 
 fprintf('\nGenerating %d TX frames offline...\n', NframesGen);
 
@@ -253,6 +253,7 @@ done = false;
 %% ---------- Benchmark timer ----------
 % profile clear;
 % profile on;
+low_corr= 0;
 tStart = tic;
 
 %% ---------- Main RX loop (offline source instead of rfSrc) ----------
@@ -428,6 +429,7 @@ while ~done
                       (norm(candPre)*norm(preSyms) + eps);
 
             if cCorr < 0.7
+                low_corr = low_corr + 1;
                 continue;
             end
 
@@ -551,6 +553,8 @@ while ~done
 end
 
 elapsed = toc(tStart);
+
+fprintf('skipped things: %d\n', low_corr);
 % profile off;
 % profile viewer;
 

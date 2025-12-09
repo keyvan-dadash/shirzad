@@ -1,7 +1,7 @@
 #pragma once
 
 #define FAST_MATH
-#define APPROX
+// #define APPROX
 #define FAST_DECIDE
 
 #define SH_USE_FLOAT

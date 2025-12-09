@@ -64,15 +64,15 @@ classdef (Abstract) AbstractDemodulator < handle
                     end
                     errs(g) = mismatches / Kc;
                     % fprintf('------------------------Start %d %d %d %d-----------------------\n', g, numel(rb), numel(pilotBits), Kc);
-                    % for k = 1: 4 :Kc
-                    %     fprintf('%d %d %d %d | ', rb(k), rb(k+1), rb(k+2), rb(k+3));
+                    % for k = 1: 6 :Kc
+                    %     fprintf('%d %d %d %d %d %d | ', rb(k), rb(k+1), rb(k+2), rb(k+3), rb(k+4), rb(k+5));
                     % end
                     % fprintf('\n');
-                    % for k = 1: 4 :Kc
-                    %     fprintf('%d %d %d %d | ', pilotBits(k), pilotBits(k+1), pilotBits(k+2), pilotBits(k+3));
+                    % for k = 1: 6 :Kc
+                    %     fprintf('%d %d %d %d %d %d | ', pilotBits(k), pilotBits(k+1), pilotBits(k+2), pilotBits(k+3), pilotBits(k+4), pilotBits(k+5));
                     % end
                     % fprintf('\n');
-                    % fprintf('------------------------End   %d-----------------------\n', g);
+                    % fprintf('------------------------End   %d %.3f-----------------------\n', g, errs(g));
                 end
             end
 

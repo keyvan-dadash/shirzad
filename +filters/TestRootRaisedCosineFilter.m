@@ -133,7 +133,7 @@ classdef TestRootRaisedCosineFilter < matlab.unittest.TestCase
             % the elapsed time in microseconds.
 
             beta = 0.35;
-            span = 10;
+            span = 4;
             spsList = [4 8];
             N = 30000;
 

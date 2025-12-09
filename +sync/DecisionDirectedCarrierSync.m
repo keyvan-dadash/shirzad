@@ -2,17 +2,17 @@ classdef DecisionDirectedCarrierSync < handle
     %DECISIONDIRECTEDCARRIERSYNC Simple decision-directed carrier/phase PLL.
 
     properties
-        ModulationOrder        (1,1) double  = 4
-        SamplesPerSymbol       (1,1) double  = 1
-        DampingFactor          (1,1) double = 0.707
-        NormalizedLoopBandwidth(1,1) double = 0.01
-        phase   (1,1) double = 0;   % current phase
-        freq    (1,1) double = 0;   % current frequency
+        ModulationOrder        (1,1) single  = 4
+        SamplesPerSymbol       (1,1) single  = 1
+        DampingFactor          (1,1) single = 0.707
+        NormalizedLoopBandwidth(1,1) single = 0.01
+        phase   (1,1) single = 0;   % current phase
+        freq    (1,1) single = 0;   % current frequency
     end
 
     properties (Access = private)
-        Kp      (1,1) double = 0;   % proportional gain
-        Ki      (1,1) double = 0;   % integral gain
+        Kp      (1,1) single = 0;   % proportional gain
+        Ki      (1,1) single = 0;   % integral gain
     end
 
     methods
@@ -43,7 +43,7 @@ classdef DecisionDirectedCarrierSync < handle
         function y = process(obj, x)
             x = x(:);
             N = numel(x);
-            y = complex(zeros(N,1));
+            y = single(complex(zeros(N,1)));
 
             for k = 1:N
                 % NCO output

@@ -196,7 +196,7 @@ while true
 
     % Advance circular index
     index = index + 1;
-    if index > 5
+    if index > 2
         index = 0;
         frameIdx = frameIdx + 1;
         if frameIdx >= frameCount + 1
