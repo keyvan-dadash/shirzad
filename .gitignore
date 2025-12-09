@@ -4,3 +4,5 @@
 +fec/*.mexw64
 +sync/*.mexw64
 +sinks/*.mexw64
+*.jpg
++mex/*mexw64
