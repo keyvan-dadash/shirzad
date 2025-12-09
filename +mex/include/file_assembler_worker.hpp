@@ -160,6 +160,8 @@ public:
     {
         if (!writer) return false;
 
+        std::vector<std::uint8_t> all_data;
+
         for (;;) {
             auto it = chunks_.find(nextOffset_);
             if (it == chunks_.end()) break;
@@ -175,9 +177,12 @@ public:
                   startOff,
                   static_cast<std::size_t>(data.size()));
 
-            writer->write(data);
+            all_data.insert(all_data.end(), std::make_move_iterator(data.begin()), 
+                    std::make_move_iterator(data.end()));
             nextOffset_ += static_cast<std::uint32_t>(data.size());
         }
+
+        writer->write(all_data);
 
         if (isComplete()) {
             writer->close();
