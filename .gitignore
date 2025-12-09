@@ -6,3 +6,4 @@
 +sinks/*.mexw64
 *.jpg
 +mex/*mexw64
+*pdf
