@@ -3,11 +3,15 @@ clear; clc;
 %% ---------- Load shared config ----------
 cfg = phyAppConfig();
 
+scrSeedBits = logical([ ...
+    1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 ...
+]);
+
 %% ---------- Link / USRP params ----------
 fc              = cfg.Link.fcTx;
 MasterClockRate = cfg.Link.MasterClockRate;
 Interp          = cfg.Link.Interp;
-Fs              = MasterClockRate / Interp;
+Fs              = MasterClockRate / Interp; %#ok<NASGU>
 
 sps   = cfg.Link.Sps;
 beta  = cfg.Link.RrcBeta;
@@ -18,14 +22,14 @@ payloadSyms     = cfg.Frame.PayloadSyms;
 txGain_dB       = cfg.Link.TxGain_dB;
 
 msgCapBytes  = cfg.Frame.MsgCapBytes;
-pilotBitsLen = cfg.Frame.PilotBitsLen;
+pilotBitsLen = cfg.Frame.PilotBitsLen; %#ok<NASGU>
 
 %% ---------- Modulator / Demodulator (for layout) ----------
-modulator = modulators.getMmodulator(cfg.Modulation.Name);
+modulator   = modulators.getMmodulator(cfg.Modulation.Name);
 demodulator = demodulators.getDemodulator(cfg.Modulation.Name);   % not strictly used in TX
 
-M   = modulator.M;
-bps = modulator.BitsPerSymbol;
+M   = modulator.M; %#ok<NASGU>
+bps = modulator.BitsPerSymbol; %#ok<NASGU>
 
 %% ---------- FEC (rate 1/2, K=3, TERMINATED) ----------
 enc = fec.ConvEncoder.rateHalf_K3();
@@ -89,32 +93,119 @@ txSink = sinks.SDRuWaveformSink( ...
   'MasterClockRate',     MasterClockRate, ...
   'InterpolationFactor', Interp, ...
   'Gain',                txGain_dB, ...
-  'UseExternalRef',      false);
+  'UseExternalRef',      false, ...
+  'TransportDataType', 'int8');
 
-disp('TX: streaming frames via USRP. Ctrl+C to stop.');
+%% ---------- Pre-buffer ALL frames from IO (until EOF / stop) ----------
+fprintf('\nTX: pre-buffering frames from DatagramSource until EOF...\n');
 
-k = 0;
-globalSampleIndex = 0; %#ok<NASGU>
+maxBufferedFrames = 100000;   % safety limit in case Reader loops forever
+pilotAmp          = cfg.Frame.PilotAmpOffset;
 
-% --- simple TX throughput monitor ---
-txMon.t0          = tic;
-txMon.lastPrintK  = 0;
-txMon.payloadPerFrameBytes = 29;   % from RX logs (dg.payloadLen)
-txMon.printEveryFrames     = 500;  % how often to print
+encodedFrames = cell(maxBufferedFrames, 1);
+frameCount    = 0;
 
 while true
-    %% ---------- Get one datagram from source ----------
-    % protoBytes : uint8 column, length = msgCapBytes
-    [protoBytes, dInfo] = dgramSrc.readFrame(); %#ok<NASGU>
+    [protoBytes, dInfo] = dgramSrc.readFrame();
 
-    %% ---------- Frame encode: bytes -> [preamble | payload] symbols ----------
-    [frmSyms_raw, frameInfoTX] = fr.encode(protoBytes); %#ok<NASGU>
-    % frmSyms_raw: [preambleLen + payloadSyms x 1] complex
+    % Treat empty protoBytes as EOF (TODO: stupid logic because it waits
+    % for all streams to finish)
+    if dInfo.EOFAll
+        fprintf('  DatagramSource returned empty protoBytes -> EOF.\n');
+        break;
+    end
 
-    % Optional DC offset / pilot amplitude
-    pilotAmp = cfg.Frame.PilotAmpOffset;
-    frmSyms  = pilotAmp + frmSyms_raw;
-    % frmSyms  = frmSyms_raw;
+    frameCount = frameCount + 1;
+    if frameCount > maxBufferedFrames
+        fprintf('  Reached maxBufferedFrames=%d, stopping buffer.\n', maxBufferedFrames);
+        frameCount = maxBufferedFrames;
+        break;
+    end
+
+    protoBytes = scrambler.scrambleBytes(protoBytes, scrSeedBits);
+
+    % Encode one PHY frame
+    [frmSyms_raw, ~] = fr.encode(protoBytes);     % [NsymFrame x 1]
+    frmSyms          = pilotAmp + frmSyms_raw;    % apply DC/pilot offset
+
+    encodedFrames{frameCount} = frmSyms;
+
+    % if frameCount == 595
+    %     fprintf('');
+    % end
+
+    if mod(frameCount, 1000) == 0
+        fprintf('  Buffered %d frames so far...\n', frameCount);
+    end
+
+    % Check EOF flag in dInfo if available
+    if isstruct(dInfo)
+        if (isfield(dInfo, 'Eof') && dInfo.Eof) || ...
+           (isfield(dInfo, 'eof') && dInfo.eof)
+            fprintf('  DatagramSource dInfo signaled EOF after %d frames.\n', frameCount);
+            break;
+        end
+    end
+end
+
+if frameCount == 0
+    error('TX: No frames were read from DatagramSource (EOF immediately?).');
+end
+
+% Truncate cell array to actual size
+encodedFrames = encodedFrames(1:frameCount);
+
+% Sanity check: all frames same length
+NsymFrame = numel(encodedFrames{1});
+for k = 2:frameCount
+    if numel(encodedFrames{k}) ~= NsymFrame
+        error('TX: Not all encoded frames have equal symbol length.');
+    end
+end
+
+NsampFrame = NsymFrame * sps;
+
+fprintf('TX: buffered %d frames | each frame: %d symbols, %d samples (upsampled)\n', ...
+        frameCount, NsymFrame, NsampFrame);
+fprintf('TX: entering streaming loop (cycling over buffered frames)...\n\n');
+
+%% ---------- TX monitoring setup ----------
+k         = 0;           % total frames sent
+frameIdx  = 1;           % 1..frameCount, cyclic
+txMon.t0  = tic;
+txMon.lastPrintK  = 0;
+txMon.printEveryFrames = 1000;
+
+% If you know the *actual* application payload per datagram, set it here.
+% Otherwise you can leave it as an approximate number.
+txMon.payloadPerFrameBytes = maxProtoPayload;   % upper bound app payload
+
+%% ---------- Main USRP streaming loop ----------
+disp('TX: streaming buffered frames via USRP. Ctrl+C to stop.');
+
+index = 0;
+% frameIdx = 596;
+frameIdx = 1;
+% a = encodedFrames{594};
+% b = encodedFrames{595};
+% c = encodedFrames{596};
+% return;
+while true
+    %% ---------- Take next pre-encoded frame (cyclic) ----------
+    frmSyms = encodedFrames{frameIdx};   % [NsymFrame x 1], complex
+
+    % Advance circular index
+    index = index + 1;
+    if index > 5
+        index = 0;
+        frameIdx = frameIdx + 1;
+        if frameIdx >= frameCount + 1
+            frameIdx = 1;
+        end
+    end
+    % if frameIdx > 600
+    %     frameIdx = 590;
+    % end
 
     %% ---------- Upsample & RRC ----------
     up = zeros(numel(frmSyms)*sps, 1);
@@ -122,25 +213,25 @@ while true
 
     txWave = txRRC.process(up);
 
-    if max(abs(txWave)) > 0
-        txWave = txWave ./ max(abs(txWave)) * 0.8;
+    % Normalize to avoid clipping
+    mx = max(abs(txWave));
+    if mx > 0
+        txWave = txWave ./ mx * 0.8;
     end
 
     %% ---------- Send to USRP ----------
     txSink.writeFrame(txWave, struct('FrameIndex', k+1));
     k = k + 1;
 
+    %% ---------- Throughput monitor ----------
     if k - txMon.lastPrintK >= txMon.printEveryFrames
-        elapsed = toc(txMon.t0);
+        elapsed    = toc(txMon.t0);
         framesThis = k - txMon.lastPrintK;
+        fps        = framesThis / elapsed;
 
-        fps = framesThis / elapsed;
+        phyBytesPerFrame = msgCapBytes;  % header + payload
+        phyRate_kBps     = (fps * cfg.ethernetPayloadLenght) / 1024;
 
-        % Upper bound using MsgCapBytes (header + payload)
-        phyBytesPerFrame = cfg.Frame.MsgCapBytes;
-        phyRate_kBps = (fps * phyBytesPerFrame) / 1024;
-
-        % Application payload rate assuming ~29B payload per frame
         appBytesPerFrame = txMon.payloadPerFrameBytes;
         appRate_kBps     = (fps * appBytesPerFrame) / 1024;
 
@@ -153,8 +244,8 @@ while true
         txMon.lastPrintK = k;
     end
 
-
-    if mod(k, 500) == 0
-        fprintf('TX sent %d frames...\n', k);
-    end
+    % if mod(k, 500) == 0
+    %     fprintf('TX sent %d frames (cycling over %d buffered frames)...\n', ...
+    %             k, frameCount);
+    % end
 end
