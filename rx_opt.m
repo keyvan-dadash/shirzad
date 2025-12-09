@@ -122,7 +122,7 @@ metricTrustThresh  = cfg.Cfo.MetricTrustThreshold;
 lastCfoRadPerSymDet = NaN;
 cfoWarnThreshRad    = 0.2;
 
-paySink = sinks.CppPayloadCollectorSink('NumThreads', 2);
+paySink = sinks.CppPayloadCollectorSink('NumThreads', 4);
 
 for kW = 1:numel(cfg.Rx.StreamWriters)
     spec = cfg.Rx.StreamWriters(kW);
@@ -159,7 +159,7 @@ disp('RX: waiting for frames…');
 frames = 0;
 
 frameSam   = frameSyms * sps;
-maxHoldSam = 200*frameSam + 8*sps + span*sps;
+maxHoldSam = 300*frameSam + 8*sps + span*sps;
 
 % Preallocated circular buffer for filtered samples
 yDetBuf = utils.CircularComplexBuffer(maxHoldSam);
@@ -171,7 +171,14 @@ superCoarseFreq    = 0;
 isSuperCoarseReady = false;
 sampleIndex        = 0;
 
-% profile on;
+% for faster cfo
+dphi            = 0;                % phase step per sample
+cfoPhasorFrame  = [];               % template phasor for one frame
+cfoZ0           = 1;                % starting phasor for current chunk
+cfoZstepFrame   = 1;                % phase jump per full SamplesPerFrame
+
+profile clear;
+profile on;
 
 while true
     [xRaw, len, over] = rfSrc.readFrame();
@@ -185,9 +192,8 @@ while true
 
     if isSuperCoarseReady && superCoarseFreq ~= 0
         N = numel(xRaw);
-        n = (0:N-1).' + sampleIndex;
-        xRaw = xRaw .* exp(-1j * 2*pi*superCoarseFreq/Fs .* n);
-        sampleIndex = sampleIndex + N;
+        xRaw = xRaw .* (cfoZ0 * cfoPhasorFrame(1:N));
+        cfoZ0 = cfoZ0 * exp(-1j * dphi * N);
     end
 
     if ~isSuperCoarseReady
@@ -201,6 +207,15 @@ while true
             superCoarseFreq = peak_new * Fs / buffLen;
             fprintf('Super-coarse CFO ~ %.3f Hz (old/new bins %d/%d)\n', ...
                     superCoarseFreq, peak, peak_new);
+
+            dphi = 2*pi*superCoarseFreq/Fs;
+
+            cfoPhasorFrame = exp(-1j * dphi * (0:SamplesPerFrame-1).');
+            
+            cfoZ0 = 1;
+            
+            cfoZstepFrame = exp(-1j * dphi * SamplesPerFrame);
+
             isSuperCoarseReady = true;
             coarseBuff = [];
         end
@@ -342,6 +357,7 @@ while true
             cCorr   = abs(candPre' * preSyms) / (norm(candPre)*norm(preSyms) + eps);
 
             if cCorr < 0.7
+                % fprintf('shiiit\n');
                 continue;
             end
 
