@@ -112,15 +112,27 @@ agc = gain.SimpleAgc( ...
     'AdaptationStepSize', cfg.Agc.AdaptationStepSize, ...
     'TargetPower',        cfg.Agc.TargetPower);
 
-dcblock = filters.FastDcBlocker('Length',1024);
+dcblock = filters.FastDcBlocker('Length', 2048);
 
-carSyncCoarse = sync.CPPDecisionDirectedCarrierSync( ...
+% carSyncCoarse = sync.CPPDecisionDirectedCarrierSync( ...
+%     'ModulationOrder',        M, ...
+%     'SamplesPerSymbol',       1, ...
+%     'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
+%     'NormalizedLoopBandwidth',cfg.CarrierSync.CoarseLoopBandwidthNorm);
+% 
+% carSyncFine = sync.CPPDecisionDirectedCarrierSync( ...
+%     'ModulationOrder',        M, ...
+%     'SamplesPerSymbol',       1, ...
+%     'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
+%     'NormalizedLoopBandwidth',cfg.CarrierSync.FineLoopBandwidthNorm);
+
+carSyncCoarse = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
     'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
     'NormalizedLoopBandwidth',cfg.CarrierSync.CoarseLoopBandwidthNorm);
 
-carSyncFine = sync.CPPDecisionDirectedCarrierSync( ...
+carSyncFine = sync.DecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
     'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
@@ -177,7 +189,8 @@ rfSrc = sources.SDRuBasebandSource( ...
       'DecimationFactor', Decim, ...
       'Gain',             rxGain_dB, ...
       'SamplesPerFrame',  SamplesPerFrame, ...
-      'TransportDataType', 'int8');
+      'TransportDataType', 'int8', ...
+      'OutputDataType', 'single');
 
 %% ---------- (Optional) FFT-based CFO estimator (symbol-rate) ----------
 % Currently unused, but kept for future experiments.
@@ -222,17 +235,10 @@ old_frames = 0;
 while true
     %% ---------- Pull chunk from source ----------
     % prof.start('readFrame');
-    [xRaw, srcInfo] = rfSrc.readFrame();
+    [xRaw, len, over] = rfSrc.readFrame();
     % prof.stop('readFrame');
 
-
-    % fprintf('new read\n');
-    if ~srcInfo.IsValid
-        pause(0.05);
-        continue;
-    end
-
-    if srcInfo.Overrun
+    if over
         fprintf('Overrun/short read (%d < %d), resetting RX state\n', ...
             numel(xRaw), SamplesPerFrame);
         return;
@@ -276,6 +282,7 @@ while true
     prof.start('dcblock');
     xDC = dcblock.process(xRaw);
     prof.stop('dcblock');
+    % xDC = xRaw;
 
     if ~useFine
         % prof.start('agc');
@@ -354,6 +361,8 @@ while true
         met_all     = [candList.Metric];
         pow_all     = [candList.WindowPower];
         
+        % disp(wSym_sc_all * Rsym / (2*pi));
+
         if all(pow_all == 0)
             score = met_all;
         else
@@ -365,11 +374,15 @@ while true
         wSym_sc_best   = wSym_sc_all(idxBest);
         fCfoHz_meas_best = wSym_sc_best * Rsym / (2*pi);
 
+
+
         if cfoInitialized
             fCfoHz_use = fCfoHz_trk;
         else
             fCfoHz_use = fCfoHz_meas_best;
         end
+
+        fprintf('freq is %.3f\n', fCfoHz_use);
         wSym_use = 2*pi * fCfoHz_use / Rsym;
 
         %% ---------- CFO correction once per offset (vectorized) ----------
@@ -517,7 +530,7 @@ while true
             [rxSyms, rotIdx, rotErrs] = dem.resolvePhaseAmbiguity(rxSyms_eq, pilotBits); %#ok<NASGU>
             % prof.stop('phaseAmbig');
 
-            % constDiag(rxSyms .* 10);
+            constDiag(rxSyms .* 10);
 
             frames = frames + 1;
 
@@ -567,6 +580,8 @@ while true
                 agc.AdaptationStepSize = 1e-9;
                 carSyncNow = carSyncFine;
                 useFine    = true;
+                carSyncFine.reset(carSyncCoarse.phase, carSyncCoarse.freq);
+                fprintf('changing to fine\n');
             end
 
             % prof.stop('frameProcess2');
@@ -595,13 +610,13 @@ while true
         % prof.stop("batch");
 
         %% ---------- periodic profiler print ----------
-        if frames >= old_frames + 100
-            fprintf(['\n=== EventProfiler summary after %d frames and current ' ...
-                ' batch of %d ===\n'], frames, nAcc);
-            prof.print();
-            prof.reset();
-            fprintf('\n');
-            old_frames = frames;
-        end
+        % if frames >= old_frames + 100
+        %     fprintf(['\n=== EventProfiler summary after %d frames and current ' ...
+        %         ' batch of %d ===\n'], frames, nAcc);
+        %     prof.print();
+        %     prof.reset();
+        %     fprintf('\n');
+        %     old_frames = frames;
+        % end
     end
 end
