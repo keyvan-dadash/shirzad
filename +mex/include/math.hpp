@@ -60,6 +60,93 @@ static inline double FastArcTan2(double y, double x) {
 	}
 }
 
+/*#define M_PI_4_P_0273	1.05839816339744830962
+static inline double FastArcTan2(double y, double x) {
+    double absx, absy;
+  absy = fabs(y);
+  absx = fabs(x);
+  short octant = ((x<0) << 2) + ((y<0) << 1 ) + (absx <= absy);
+  switch (octant) {
+    case 0: {
+        if (x == 0 && y == 0)
+          return 0;
+        double val = absy/absx;
+        return (M_PI_4_P_0273 - 0.273*val)*val; //1st octant
+        break;
+      }
+    case 1:{
+        if (x == 0 && y == 0)
+          return 0.0;
+        double val = absx/absy;
+        return M_PI_2 - (M_PI_4_P_0273 - 0.273*val)*val; //2nd octant
+        break;
+      }
+    case 2: {
+        double val =absy/absx;
+        return -(M_PI_4_P_0273 - 0.273*val)*val; //8th octant
+        break;
+      }
+    case 3: {
+        double val =absx/absy;
+        return -M_PI_2 + (M_PI_4_P_0273 - 0.273*val)*val;//7th octant
+        break;
+      }
+    case 4: {
+        double val =absy/absx;
+        return  M_PI - (M_PI_4_P_0273 - 0.273*val)*val;  //4th octant
+      }
+    case 5: {
+        double val =absx/absy;
+        return  M_PI_2 + (M_PI_4_P_0273 - 0.273*val)*val;//3rd octant
+        break;
+      }
+    case 6: {
+        double val =absy/absx;
+        return -M_PI + (M_PI_4_P_0273 - 0.273*val)*val; //5th octant
+        break;
+      }
+    case 7: {
+        double val =absx/absy;
+        return -M_PI_2 - (M_PI_4_P_0273 - 0.273*val)*val; //6th octant
+        break;
+      }
+    default:
+      return 0.0;
+    }
+}*/
+
+/*
+#define PI_FLOAT     3.14159265f
+#define PIBY2_FLOAT  1.5707963f
+
+static inline double FastArcTan2(double y, double x) {
+    if ( x == 0.0f )
+	{
+		if ( y > 0.0f ) return PIBY2_FLOAT;
+		if ( y == 0.0f ) return 0.0f;
+		return -PIBY2_FLOAT;
+	}
+	float atan;
+	float z = y/x;
+	if ( fabs( z ) < 1.0f )
+	{
+		atan = z/(1.0f + 0.28f*z*z);
+		if ( x < 0.0f )
+		{
+			if ( y < 0.0f ) return atan - PI_FLOAT;
+			return atan + PI_FLOAT;
+		}
+	}
+	else
+	{
+		atan = PIBY2_FLOAT - z/(z*z + 0.28f);
+		if ( y < 0.0f ) return atan - PI_FLOAT;
+	}
+	return atan;
+}*/
+
+
+
 // Got from SLEEF
 static inline float mlaf(float x, float y, float z) {
 #if defined(__FMA__) || defined(__FMA)

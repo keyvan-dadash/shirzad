@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <limits>
 
-
 #include "include/simd.hpp"
 #include "include/math.hpp"
 #include "defines.hpp"
@@ -54,39 +53,20 @@ void mexFunction(int nlhs, mxArray* plhs[],
     const mxArray* y_in = prhs[0];
 
 #ifdef SH_USE_FLOAT
-    if (!mxIsSingle(y_in)) {
+    if (!mxIsSingle(y_in) || !mxIsComplex(y_in)) {
         mexErrMsgIdAndTxt("schmidlCoxDetectMex:InvalidY",
-                          "Input y must be single (real or complex) when compiled with SH_USE_FLOAT.");
+                          "Input y must be complex single when compiled with SH_USE_FLOAT.");
     }
+    mxComplexSingle* yc = mxGetComplexSingles(y_in);   // interleaved complex single
 #else
-    if (!mxIsDouble(y_in)) {
+    if (!mxIsDouble(y_in) || !mxIsComplex(y_in)) {
         mexErrMsgIdAndTxt("schmidlCoxDetectMex:InvalidY",
-                          "Input y must be double (real or complex).");
+                          "Input y must be complex double.");
     }
+    mxComplexDouble* yc = mxGetComplexDoubles(y_in);   // interleaved complex double
 #endif
 
     const mwSize N = mxGetNumberOfElements(y_in);
-    const bool isComplex = mxIsComplex(y_in);
-
-#ifdef SH_USE_FLOAT
-    mxComplexSingle* yc = nullptr;
-    SHReal*          yr = nullptr;
-
-    if (isComplex) {
-        yc = mxGetComplexSingles(y_in);   // interleaved complex single
-    } else {
-        yr = reinterpret_cast<SHReal*>(mxGetData(y_in));  // purely real, imag=0
-    }
-#else
-    mxComplexDouble* yc = nullptr;
-    SHReal*          yr = nullptr;
-
-    if (isComplex) {
-        yc = mxGetComplexDoubles(y_in);   // interleaved complex double
-    } else {
-        yr = mxGetDoubles(y_in);   // purely real, imag=0
-    }
-#endif
 
     int sps = static_cast<int>(mxGetScalar(prhs[1]));
     int Lh  = static_cast<int>(mxGetScalar(prhs[2]));
@@ -98,7 +78,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
                           "sps and Lh must be positive.");
     }
 
-    // There is no sample
+    // No samples
     if (N == 0) {
         plhs[0] = createCandidateStructArray(0);
         return;
@@ -107,19 +87,16 @@ void mexFunction(int nlhs, mxArray* plhs[],
     const int Nint = static_cast<int>(N);
     const int Lh2  = 2 * Lh; // full preamble length in symbols
     const double Lpre    = 2.0 * static_cast<double>(Lh);
-    const double maxSpan = Lpre / 2.0; // grouping span in samples in chosing candidates (Lpre/2)
+    const double maxSpan = Lpre / 2.0; // grouping span in samples in choosing candidates (Lpre/2)
 
-    std::vector<SHReal> ySymRe;
-    std::vector<SHReal> ySymIm;
+    // Symbol-rate data is now accessed directly from yc (no ySymRe/ySymIm).
     std::vector<SHReal> qRe, qIm;
     std::vector<SHReal> pow;
     std::vector<SHReal> PRe, PIm;
     std::vector<SHReal> R;
     std::vector<SHReal> M;
 
-    // For faster execution
-    ySymRe.reserve(N);
-    ySymIm.reserve(N);
+    // Reserve for speed
     qRe.reserve(N);
     qIm.reserve(N);
     pow.reserve(N);
@@ -147,25 +124,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
             continue;
         }
 
-        ySymRe.resize(Ns);
-        ySymIm.resize(Ns);
-
-        // Downsample to symbol rate for this offset
-        for (int n = 0, idx = off; n < Ns; ++n, idx += sps) {
-            if (isComplex) {
-#ifdef SH_USE_FLOAT
-                ySymRe[n] = yc[idx].real;
-                ySymIm[n] = yc[idx].imag;
-#else
-                ySymRe[n] = yc[idx].real;
-                ySymIm[n] = yc[idx].imag;
-#endif
-            } else {
-                ySymRe[n] = yr[idx];
-                ySymIm[n] = static_cast<SHReal>(0);
-            }
-        }
-
         const int Nq = Ns - Lh;
         if (Nq <= 0) {
             continue;
@@ -177,56 +135,172 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
         // ----------------------------------------------------
         // q(n) = y(n) * conj(y(n+Lh)), pow(n) = |y(n)|^2
+        // Directly from yc with stride = sps (no ySymRe/ySymIm).
         // ----------------------------------------------------
         int n = 0;
-        for (; n + (SH_LANES - 1) < Nq; n += SH_LANES) {
-            SHVec ar = SH_LOAD(ySymRe.data() + n);
-            SHVec ai = SH_LOAD(ySymIm.data() + n);
 
-            SHVec br = SH_LOAD(ySymRe.data() + n + Lh);
-            SHVec bi = SH_LOAD(ySymIm.data() + n + Lh);
+        // q and pow for n = 0..Nq-1
+        int Nq4 = Nq & ~3;   // largest multiple of 4 <= Nq
 
-            SHVec arbr = SH_MUL(ar, br);
-            SHVec aibi = SH_MUL(ai, bi);
-            SHVec qr   = SH_ADD(arbr, aibi);
+        for (; n < Nq4; n += 4) {
+            // ----- n -----
+            int idx1_0 = off + (n    ) * sps;
+            int idx2_0 = off + (n+Lh ) * sps;
+#ifdef SH_USE_FLOAT
+            const mxComplexSingle& a0 = yc[idx1_0];
+            const mxComplexSingle& b0 = yc[idx2_0];
+#else
+            const mxComplexDouble& a0 = yc[idx1_0];
+            const mxComplexDouble& b0 = yc[idx2_0];
+#endif
+            SHReal ar0 = static_cast<SHReal>(a0.real);
+            SHReal ai0 = static_cast<SHReal>(a0.imag);
+            SHReal br0 = static_cast<SHReal>(b0.real);
+            SHReal bi0 = static_cast<SHReal>(b0.imag);
 
-            SHVec aibr = SH_MUL(ai, br);
-            SHVec arbi = SH_MUL(ar, bi);
-            SHVec qi   = SH_SUB(aibr, arbi);  // imag: ai*br - ar*bi
+            SHReal qr0 = ar0 * br0 + ai0 * bi0;
+            SHReal qi0 = -ar0 * bi0 + ai0 * br0;
+            qRe[n    ] = qr0;
+            qIm[n    ] = qi0;
+            pow[n    ] = ar0 * ar0 + ai0 * ai0;
 
-            SH_STORE(qRe.data() + n, qr);
-            SH_STORE(qIm.data() + n, qi);
+            // ----- n+1 -----
+            int n1 = n + 1;
+            int idx1_1 = off + n1 * sps;
+            int idx2_1 = off + (n1 + Lh) * sps;
+#ifdef SH_USE_FLOAT
+            const mxComplexSingle& a1 = yc[idx1_1];
+            const mxComplexSingle& b1 = yc[idx2_1];
+#else
+            const mxComplexDouble& a1 = yc[idx1_1];
+            const mxComplexDouble& b1 = yc[idx2_1];
+#endif
+            SHReal ar1 = static_cast<SHReal>(a1.real);
+            SHReal ai1 = static_cast<SHReal>(a1.imag);
+            SHReal br1 = static_cast<SHReal>(b1.real);
+            SHReal bi1 = static_cast<SHReal>(b1.imag);
+
+            SHReal qr1 = ar1 * br1 + ai1 * bi1;
+            SHReal qi1 = -ar1 * bi1 + ai1 * br1;
+            qRe[n1] = qr1;
+            qIm[n1] = qi1;
+            pow[n1] = ar1 * ar1 + ai1 * ai1;
+
+            // ----- n+2 -----
+            int n2 = n + 2;
+            int idx1_2 = off + n2 * sps;
+            int idx2_2 = off + (n2 + Lh) * sps;
+#ifdef SH_USE_FLOAT
+            const mxComplexSingle& a2 = yc[idx1_2];
+            const mxComplexSingle& b2 = yc[idx2_2];
+#else
+            const mxComplexDouble& a2 = yc[idx1_2];
+            const mxComplexDouble& b2 = yc[idx2_2];
+#endif
+            SHReal ar2 = static_cast<SHReal>(a2.real);
+            SHReal ai2 = static_cast<SHReal>(a2.imag);
+            SHReal br2 = static_cast<SHReal>(b2.real);
+            SHReal bi2 = static_cast<SHReal>(b2.imag);
+
+            SHReal qr2 = ar2 * br2 + ai2 * bi2;
+            SHReal qi2 = -ar2 * bi2 + ai2 * br2;
+            qRe[n2] = qr2;
+            qIm[n2] = qi2;
+            pow[n2] = ar2 * ar2 + ai2 * ai2;
+
+            // ----- n+3 -----
+            int n3 = n + 3;
+            int idx1_3 = off + n3 * sps;
+            int idx2_3 = off + (n3 + Lh) * sps;
+#ifdef SH_USE_FLOAT
+            const mxComplexSingle& a3 = yc[idx1_3];
+            const mxComplexSingle& b3 = yc[idx2_3];
+#else
+            const mxComplexDouble& a3 = yc[idx1_3];
+            const mxComplexDouble& b3 = yc[idx2_3];
+#endif
+            SHReal ar3 = static_cast<SHReal>(a3.real);
+            SHReal ai3 = static_cast<SHReal>(a3.imag);
+            SHReal br3 = static_cast<SHReal>(b3.real);
+            SHReal bi3 = static_cast<SHReal>(b3.imag);
+
+            SHReal qr3 = ar3 * br3 + ai3 * bi3;
+            SHReal qi3 = -ar3 * bi3 + ai3 * br3;
+            qRe[n3] = qr3;
+            qIm[n3] = qi3;
+            pow[n3] = ar3 * ar3 + ai3 * ai3;
         }
-        // tail for q
+
+        // Remainder for n = Nq4..Nq-1
         for (; n < Nq; ++n) {
-            SHReal ar = ySymRe[n];
-            SHReal ai = ySymIm[n];
-            SHReal br = ySymRe[n + Lh];
-            SHReal bi = ySymIm[n + Lh];
+            int idx1 = off + n * sps;
+            int idx2 = off + (n + Lh) * sps;
+#ifdef SH_USE_FLOAT
+            const mxComplexSingle& a = yc[idx1];
+            const mxComplexSingle& b = yc[idx2];
+#else
+            const mxComplexDouble& a = yc[idx1];
+            const mxComplexDouble& b = yc[idx2];
+#endif
+            SHReal ar = static_cast<SHReal>(a.real);
+            SHReal ai = static_cast<SHReal>(a.imag);
+            SHReal br = static_cast<SHReal>(b.real);
+            SHReal bi = static_cast<SHReal>(b.imag);
 
             SHReal qr = ar * br + ai * bi;
             SHReal qi = -ar * bi + ai * br;
 
             qRe[n] = qr;
             qIm[n] = qi;
+            pow[n] = ar * ar + ai * ai;
         }
 
-        // pow(n) = |y(n)|^2
-        n = 0;
-        for (; n + (SH_LANES - 1) < Ns; n += SH_LANES) {
-            SHVec ar = SH_LOAD(ySymRe.data() + n);
-            SHVec ai = SH_LOAD(ySymIm.data() + n);
+        // Now fill pow for n = Nq..Ns-1 (no qRe/qIm needed here)
+        int m = Nq;
+        int Ns4 = Ns & ~3;   // largest multiple of 4 <= Ns
 
-            SHVec ar2  = SH_MUL(ar, ar);
-            SHVec ai2  = SH_MUL(ai, ai);
-            SHVec mag2 = SH_ADD(ar2, ai2);
+        for (; m < Ns4; m += 4) {
+            int idx0 = off + (m    ) * sps;
+            int idx1 = off + (m + 1) * sps;
+            int idx2 = off + (m + 2) * sps;
+            int idx3 = off + (m + 3) * sps;
+#ifdef SH_USE_FLOAT
+            const mxComplexSingle& a0 = yc[idx0];
+            const mxComplexSingle& a1 = yc[idx1];
+            const mxComplexSingle& a2 = yc[idx2];
+            const mxComplexSingle& a3 = yc[idx3];
+#else
+            const mxComplexDouble& a0 = yc[idx0];
+            const mxComplexDouble& a1 = yc[idx1];
+            const mxComplexDouble& a2 = yc[idx2];
+            const mxComplexDouble& a3 = yc[idx3];
+#endif
+            SHReal ar0 = static_cast<SHReal>(a0.real);
+            SHReal ai0 = static_cast<SHReal>(a0.imag);
+            SHReal ar1 = static_cast<SHReal>(a1.real);
+            SHReal ai1 = static_cast<SHReal>(a1.imag);
+            SHReal ar2 = static_cast<SHReal>(a2.real);
+            SHReal ai2 = static_cast<SHReal>(a2.imag);
+            SHReal ar3 = static_cast<SHReal>(a3.real);
+            SHReal ai3 = static_cast<SHReal>(a3.imag);
 
-            SH_STORE(pow.data() + n, mag2);
+            pow[m    ] = ar0 * ar0 + ai0 * ai0;
+            pow[m + 1] = ar1 * ar1 + ai1 * ai1;
+            pow[m + 2] = ar2 * ar2 + ai2 * ai2;
+            pow[m + 3] = ar3 * ar3 + ai3 * ai3;
         }
-        for (; n < Ns; ++n) {
-            SHReal ar = ySymRe[n];
-            SHReal ai = ySymIm[n];
-            pow[n]    = ar * ar + ai * ai;
+
+        // Remainder for m = Ns4..Ns-1
+        for (; m < Ns; ++m) {
+            int idx = off + m * sps;
+#ifdef SH_USE_FLOAT
+            const mxComplexSingle& a = yc[idx];
+#else
+            const mxComplexDouble& a = yc[idx];
+#endif
+            SHReal ar = static_cast<SHReal>(a.real);
+            SHReal ai = static_cast<SHReal>(a.imag);
+            pow[m]    = ar * ar + ai * ai;
         }
 
         // ----------------------------------------------------
@@ -237,14 +311,14 @@ void mexFunction(int nlhs, mxArray* plhs[],
         PIm.resize(Lwin);
         R.resize(Lwin);
 
-        // P(d) sliding sum
+        // P(d) sliding sum over qRe/qIm
         SHVec sumPr_v = SH_SETZERO();
         SHVec sumPi_v = SH_SETZERO();
 
-        int m = 0;
-        for (; m + (SH_LANES - 1) < Lh; m += SH_LANES) {
-            SHVec re = SH_LOAD(qRe.data() + m);
-            SHVec im = SH_LOAD(qIm.data() + m);
+        int t = 0;
+        for (; t + (SH_LANES - 1) < Lh; t += SH_LANES) {
+            SHVec re = SH_LOAD(qRe.data() + t);
+            SHVec im = SH_LOAD(qIm.data() + t);
 
             sumPr_v = SH_ADD(sumPr_v, re);
             sumPi_v = SH_ADD(sumPi_v, im);
@@ -262,10 +336,10 @@ void mexFunction(int nlhs, mxArray* plhs[],
             sumPi += tmpPi[i];
         }
 
-        // tail data
-        for (; m < Lh; ++m) {
-            sumPr += qRe[m];
-            sumPi += qIm[m];
+        // tail data for initial window
+        for (; t < Lh; ++t) {
+            sumPr += qRe[t];
+            sumPi += qIm[t];
         }
 
         PRe[0] = sumPr;
@@ -297,7 +371,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
             }
         }
 
-        // tail data
+        // Tail for P(d)
         for (; d < Lwin; ++d) {
             sumPr += qRe[d + Lh - 1] - qRe[d - 1];
             sumPi += qIm[d + Lh - 1] - qIm[d - 1];
@@ -308,9 +382,9 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
         // R(d) sliding sum over pow, length 2*Lh
         SHVec sumR_v = SH_SETZERO();
-        m = 0;
-        for (; m + (SH_LANES - 1) < Lh2; m += SH_LANES) {
-            SHVec v = SH_LOAD(pow.data() + m);
+        int u = 0;
+        for (; u + (SH_LANES - 1) < Lh2; u += SH_LANES) {
+            SHVec v = SH_LOAD(pow.data() + u);
             sumR_v  = SH_ADD(sumR_v, v);
         }
 
@@ -321,8 +395,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
             sumR += tmpR[i];
         }
 
-        for (; m < Lh2; ++m) {
-            sumR += pow[m];
+        for (; u < Lh2; ++u) {
+            sumR += pow[u];
         }
 
         R[0] = sumR;
@@ -344,7 +418,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
             }
         }
 
-        // tail data
+        // Tail for R(d)
         for (; d < Lwin; ++d) {
             sumR += pow[d + Lh2 - 1] - pow[d - 1];
             R[d] = sumR;
@@ -387,14 +461,14 @@ void mexFunction(int nlhs, mxArray* plhs[],
             SHReal Pr = PRe[k];
             SHReal Pi = PIm[k];
 
-            // TODO: make this faster
 #ifndef FAST_MATH
             double phi = std::atan2(static_cast<double>(Pi),
                                     static_cast<double>(Pr));
 #else
             double phi = FastArcTan2(static_cast<double>(Pi),
-                                    static_cast<double>(Pr));
+                                     static_cast<double>(Pr));
 #endif /* FAST_MATH */
+
             double cfoRadPerSym = phi / static_cast<double>(Lh);
 
             // Convert (off, k) to absolute sample index (1-based) in y
