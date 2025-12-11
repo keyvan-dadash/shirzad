@@ -38,6 +38,8 @@ Kminus1 = K - 1;
 
 % FEC encoder: dataBits (0/1) -> coded bits (0/1), terminated
 fecEncodeFcn = @(dataBits) enc.encode(logical(dataBits), true);
+% fecEncodeFcn = @(dataBits) ...
+%     fec.puncture78_k3( enc.encode(logical(dataBits), true) );
 
 % Decode function is not used in TX, but Payload wants a handle.
 fecDecodeDummy = @(codedBits) error('Payload.decode is not used in TX.');
@@ -71,6 +73,10 @@ L_in = databitsLen + Kminus1;           % "time steps" into encoder
 assert(codedBitsLen == 2 * L_in, ...
     'TX: codedBitsLen (%d) != 2*(databitsLen+%d)=%d.', ...
     codedBitsLen, Kminus1, 2*L_in);
+% assert(codedBitsLen == floor(8/7 * L_in), ...
+%     'TX: codedBitsLen (%d) != 2*(databitsLen+%d)=%d.', ...
+%     codedBitsLen, Kminus1, 8/7 * L_in);
+% assert(mod(L_in, 7) == 0, 'L_in (trellis steps) must be a multiple of 7 for rate 7/8.');
 
 fprintf('TX protocol+FEC:\n');
 fprintf('  datagram bytes  : %d (header=%d, payload<=%d)\n', ...
@@ -127,6 +133,7 @@ while true
     % Encode one PHY frame
     [frmSyms_raw, ~] = fr.encode(protoBytes);     % [NsymFrame x 1]
     frmSyms          = pilotAmp + frmSyms_raw;    % apply DC/pilot offset
+    % frmSyms          = frmSyms_raw;
 
     encodedFrames{frameCount} = frmSyms;
 
@@ -190,6 +197,7 @@ frameIdx = 1;
 % b = encodedFrames{595};
 % c = encodedFrames{596};
 % return;
+
 while true
     %% ---------- Take next pre-encoded frame (cyclic) ----------
     frmSyms = encodedFrames{frameIdx};   % [NsymFrame x 1], complex

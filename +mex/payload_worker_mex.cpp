@@ -59,7 +59,12 @@ static void workerLoop(int workerID)
 #ifndef K7
         std::vector<std::uint8_t> infoBits  = viterbi_k3_decode(codedBits);
 #else
+try {
         std::vector<std::uint8_t> infoBits  = viterbi_k3_7_8_decode(codedBits);
+}catch (const std::runtime_error& error)
+{
+   goLog("[WORKER] ERROR: %s", e.what());
+}
 #endif /* K7 */
         std::vector<std::uint8_t> dataBytes = bitsToBytesMSB(infoBits);
 

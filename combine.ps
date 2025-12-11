@@ -1,0 +1,27 @@
+# Directory containing the chunks
+$path = "U:\Chalmers\MCC125\codes\shirzad"
+
+# Output file
+$outFile = "U:\Chalmers\MCC125\codes\shirzad\test.pdf"
+
+# Get all file_* and sort by numeric id in the name
+$files = Get-ChildItem -Path $path -Filter "file_*" |
+    Sort-Object {
+        # Extract the number after 'file_'
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
+        [int]($base -split "_")[-1]
+    }
+
+# Create / overwrite output file
+$outStream = [System.IO.File]::Open($outFile, [System.IO.FileMode]::Create)
+
+foreach ($f in $files) {
+    $inStream = [System.IO.File]::OpenRead($f.FullName)
+    $inStream.CopyTo($outStream)
+    $inStream.Dispose()
+}
+
+$outStream.Dispose()
+
+Write-Host "Combined $($files.Count) files into $outFile"
+

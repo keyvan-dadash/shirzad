@@ -112,31 +112,31 @@ agc = gain.SimpleAgc( ...
     'AdaptationStepSize', cfg.Agc.AdaptationStepSize, ...
     'TargetPower',        cfg.Agc.TargetPower);
 
-dcblock = filters.FastDcBlocker('Length', 2048);
+dcblock = filters.FastDcBlocker('Length', 8192);
 
-% carSyncCoarse = sync.CPPDecisionDirectedCarrierSync( ...
-%     'ModulationOrder',        M, ...
-%     'SamplesPerSymbol',       1, ...
-%     'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
-%     'NormalizedLoopBandwidth',cfg.CarrierSync.CoarseLoopBandwidthNorm);
-% 
-% carSyncFine = sync.CPPDecisionDirectedCarrierSync( ...
-%     'ModulationOrder',        M, ...
-%     'SamplesPerSymbol',       1, ...
-%     'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
-%     'NormalizedLoopBandwidth',cfg.CarrierSync.FineLoopBandwidthNorm);
-
-carSyncCoarse = sync.DecisionDirectedCarrierSync( ...
+carSyncCoarse = sync.CPPDecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
     'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
     'NormalizedLoopBandwidth',cfg.CarrierSync.CoarseLoopBandwidthNorm);
 
-carSyncFine = sync.DecisionDirectedCarrierSync( ...
+carSyncFine = sync.CPPDecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
     'SamplesPerSymbol',       1, ...
     'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
     'NormalizedLoopBandwidth',cfg.CarrierSync.FineLoopBandwidthNorm);
+
+% carSyncCoarse = sync.DecisionDirectedCarrierSync( ...
+%     'ModulationOrder',        M, ...
+%     'SamplesPerSymbol',       1, ...
+%     'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
+%     'NormalizedLoopBandwidth',cfg.CarrierSync.CoarseLoopBandwidthNorm);
+% 
+% carSyncFine = sync.DecisionDirectedCarrierSync( ...
+%     'ModulationOrder',        M, ...
+%     'SamplesPerSymbol',       1, ...
+%     'DampingFactor',          cfg.CarrierSync.DampingFactor, ...
+%     'NormalizedLoopBandwidth',cfg.CarrierSync.FineLoopBandwidthNorm);
 
 carSyncNow = carSyncCoarse;
 useFine    = false;
@@ -241,12 +241,13 @@ while true
     if over
         fprintf('Overrun/short read (%d < %d), resetting RX state\n', ...
             numel(xRaw), SamplesPerFrame);
-        return;
+        continue;
     end
 
     % continue;
 
     % sa(xRaw);
+    % continue;
     % fprintf('the size of buff is: %d\n', numel(xRaw));
 
     %% ---------- Super-coarse CFO (sample-rate FFT) ----------
@@ -257,6 +258,8 @@ while true
         sampleIndex = sampleIndex + N;
     end
 
+     sa(xRaw);
+
     if ~isSuperCoarseReady
         coarseBuff = [coarseBuff; xRaw];
 
@@ -264,7 +267,10 @@ while true
             XCfo = coarseBuff(1:buffLen);
 
             w          = hann(buffLen);
-            fft_result = fftshift(fft(XCfo .* w));
+            fft_result = fftshift(fft(XCfo));
+
+            fft_2 = abs(fft_result);
+            [sort_fft, z] = sort(fft_2,'descend');
 
             [~, peak]  = max(abs(fft_result));
             peak_new   = peak - (buffLen / 2 + 1);
@@ -279,9 +285,9 @@ while true
     end
 
     %% ---------- DC blocker + AGC ----------
-    prof.start('dcblock');
+    % prof.start('dcblock');
     xDC = dcblock.process(xRaw);
-    prof.stop('dcblock');
+    % prof.stop('dcblock');
     % xDC = xRaw;
 
     if ~useFine
@@ -291,6 +297,8 @@ while true
     else
         xAGC = xDC;
     end
+
+    % xAGC = xDC;
 
     %% ---------- Detection path: RRC ----------
     prof.start('rrc');
@@ -322,6 +330,7 @@ while true
         % prof.stop('preambleDetect');
 
         if isempty(candList)
+            fprintf('sfsfsd');
             % No possible preamble anywhere in the buffer.
             % Safe slide: keep only last Lpre symbols worth of samples.
             keepSam = Lpre * sps;
@@ -530,7 +539,7 @@ while true
             [rxSyms, rotIdx, rotErrs] = dem.resolvePhaseAmbiguity(rxSyms_eq, pilotBits); %#ok<NASGU>
             % prof.stop('phaseAmbig');
 
-            constDiag(rxSyms .* 10);
+            constDiag(rxSyms);
 
             frames = frames + 1;
 

@@ -32,6 +32,8 @@ K   = cfg.Fec.ConstraintLength;
 Kminus1 = K - 1;
 
 fecEncodeFcn  = @(dataBits) enc.encode(logical(dataBits), true);
+% fecEncodeFcn = @(dataBits) ...
+%     fec.puncture78_k3( enc.encode(logical(dataBits), true) );
 fecDecodeFcn  = @(codedBits) double(fec.viterbi_k3_mex(logical(codedBits)));
 
 msgCapBytes  = cfg.Frame.MsgCapBytes;
@@ -66,6 +68,7 @@ maxProtoPayload = msgCapBytes - hdrBytes;
 
 L_in = databitsLen + Kminus1;
 assert(codedBitsLen == 2*L_in, 'RX: codedBitsLen mismatch TX.');
+% assert(codedBitsLen == floor(8/7*L_in), 'RX: codedBitsLen mismatch TX.');
 
 fprintf('RX protocol+FEC:\n');
 fprintf('  Modulation      : %s (M=%d, bps=%.1f)\n', ...
@@ -124,7 +127,7 @@ metricTrustThresh  = cfg.Cfo.MetricTrustThreshold;
 lastCfoRadPerSymDet = NaN;
 cfoWarnThreshRad    = 0.2;
 
-paySink = sinks.CppPayloadCollectorSink('NumThreads', 12);
+paySink = sinks.CppPayloadCollectorSink('NumThreads', 1);
 
 for kW = 1:numel(cfg.Rx.StreamWriters)
     spec = cfg.Rx.StreamWriters(kW);

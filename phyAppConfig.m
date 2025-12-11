@@ -12,17 +12,17 @@ function cfg = phyAppConfig()
 
 %% ---------- Link / USRP params ----------
 cfg.Link.fcTx            = 25e6;     % TX center frequency
-cfg.Link.fcRx            = 25e6 - 2e6;    % RX center frequency (can be offset)
+cfg.Link.fcRx            = 25e6;    % RX center frequency (can be offset)
 cfg.Link.MasterClockRate = 100e6;
-cfg.Link.Interp          = 12;
-cfg.Link.Decim           = 12;
+cfg.Link.Interp          = 10;
+cfg.Link.Decim           = 10;
 cfg.Link.Fs              = cfg.Link.MasterClockRate / cfg.Link.Decim;  % RX Fs
 
 cfg.Link.Sps       = 4;            % samples per symbol
 cfg.Link.RrcBeta   = 0.8;          % RRC roll-off
 cfg.Link.RrcSpan   = 10;            % RRC span (symbols)
 cfg.Link.TxGain_dB = 0;
-cfg.Link.RxGain_dB = 0;
+cfg.Link.RxGain_dB = 1;
 
 %% ---------- Modulation ----------
 % Name is used with getMmodulator/getDemodulator
@@ -68,7 +68,7 @@ cfg.Frame.MseqSeed        = 1001;   % RNG seed used in training generator
 cfg.Link.SamplesPerFrame = (2*cfg.Frame.PreambleHalfLen + cfg.Frame.PayloadSyms) * 20 ...
     * cfg.Link.Sps;    % SDRu RX frame size
 
-cfg.Frame.PilotAmpOffset  = 0.1;    % DC offset added to frame symbols (TX)
+cfg.Frame.PilotAmpOffset  = 0.2;    % DC offset added to frame symbols (TX)
 
 %% ---------- AGC ----------
 cfg.Agc.AveragingLength    = 1000;
@@ -77,9 +77,9 @@ cfg.Agc.AdaptationStepSize = 1e-3;
 cfg.Agc.TargetPower        = 1.0;
 
 %% ---------- Carrier / phase sync (DecisionDirectedCarrierSync) ----------
-cfg.CarrierSync.DampingFactor           = 0.9;
-cfg.CarrierSync.CoarseLoopBandwidthNorm = 0.03;   % normalized to symbol rate
-cfg.CarrierSync.FineLoopBandwidthNorm   = 0.01;
+cfg.CarrierSync.DampingFactor           = 0.707;
+cfg.CarrierSync.CoarseLoopBandwidthNorm = 0.01;   % normalized to symbol rate
+cfg.CarrierSync.FineLoopBandwidthNorm   = 0.001;
 cfg.CarrierSync.SwitchToFineAfterFrames = 35;    % after N good frames
 
 %% ---------- Preamble detector (Schmidl & Cox-style) ----------
