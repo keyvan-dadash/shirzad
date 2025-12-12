@@ -112,7 +112,7 @@ agc = gain.SimpleAgc( ...
     'AdaptationStepSize', cfg.Agc.AdaptationStepSize, ...
     'TargetPower',        cfg.Agc.TargetPower);
 
-dcblock = filters.FastDcBlocker('Length', 8192);
+dcblock = filters.FastDcBlocker('Length', 20000);
 
 carSyncCoarse = sync.CPPDecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
@@ -444,6 +444,7 @@ while true
         acceptedPayEnd     = [];
         acceptedWSym_sc    = [];
         acceptedMetric     = [];
+        acceptedTheta      = [];
 
         for jj = 1:numel(candIdxValid)
             ic   = candIdxValid(jj);    % index into candList
@@ -468,7 +469,9 @@ while true
 
             % Validate preamble via correlation with known preamble
             candPre = ySym_cfo(preStart:preEndS_i);
-            cCorr   = abs(candPre' * preSyms) / (norm(candPre)*norm(preSyms) + eps);
+            h = preSyms' * candPre;
+
+            cCorr   = abs(h) / (norm(candPre)*norm(preSyms) + eps);
 
             if cCorr < 0.7
                 % false alarm: skip this candidate but do NOT drop samples
@@ -487,6 +490,7 @@ while true
             acceptedPayEnd(end+1)     = payEndS_i;       %#ok<AGROW>
             acceptedWSym_sc(end+1)    = cand.CfoRadPerSym; %#ok<AGROW>
             acceptedMetric(end+1)     = cand.Metric;     %#ok<AGROW>
+            acceptedTheta(end+1)      = angle(h);
 
             % prof.stop('frameProcess');
         end
@@ -530,6 +534,10 @@ while true
             idx0 = segStartIdx(k);
             idx1 = idx0 + segLen(k) - 1;
             rxSyms_eq = bigPayEq(idx0:idx1);
+
+            theta = acceptedTheta(k);
+            ph = exp(-1j * theta);
+            rxSyms_eq = ph * rxSyms_eq;
 
             %% ---------- frame-level processing ----------
             % prof.start('frameProcess2');

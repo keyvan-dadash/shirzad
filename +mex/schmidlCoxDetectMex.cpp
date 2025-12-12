@@ -384,8 +384,8 @@ void mexFunction(int nlhs, mxArray* plhs[],
         SHVec sumR_v = SH_SETZERO();
         int u = 0;
         for (; u + (SH_LANES - 1) < Lh2; u += SH_LANES) {
-            SHVec v = SH_LOAD(pow.data() + u);
-            sumR_v  = SH_ADD(sumR_v, v);
+            SHVec vv = SH_LOAD(pow.data() + u);
+            sumR_v   = SH_ADD(sumR_v, vv);
         }
 
         SHReal tmpR[SH_LANES];
@@ -439,6 +439,10 @@ void mexFunction(int nlhs, mxArray* plhs[],
             M[k]         = magP2 / denom;
         }
 
+        // --------- CANDIDATE PICKING + ADVANCED CFO ESTIMATE ----------
+        const double PI = 3.14159265358979323846;
+        const int CFO_RADIUS = 8;   // number of neighbors on each side to use
+
         for (int k = 0; k < Lwin; ++k) {
             SHReal Rv     = R[k];
             SHReal metric = M[k];
@@ -458,18 +462,78 @@ void mexFunction(int nlhs, mxArray* plhs[],
                 continue;
             }
 
-            SHReal Pr = PRe[k];
-            SHReal Pi = PIm[k];
+            // --- Advanced CFO: use neighboring P(d) with unwrap+average ---
+            int d0 = k;
+            int left  = std::max(0, d0 - CFO_RADIUS);
+            int right = std::min(Lwin - 1, d0 + CFO_RADIUS);
 
+            double sumPhi = 0.0;
+            int    count  = 0;
+
+            // Start with central window
+            SHReal Pr0 = PRe[d0];
+            SHReal Pi0 = PIm[d0];
 #ifndef FAST_MATH
-            double phi = std::atan2(static_cast<double>(Pi),
-                                    static_cast<double>(Pr));
+            double originalPhiPrev = std::atan2(static_cast<double>(Pi0),
+                                        static_cast<double>(Pr0));
+            double phiPrev = originalPhiPrev;
 #else
-            double phi = FastArcTan2(static_cast<double>(Pi),
-                                     static_cast<double>(Pr));
-#endif /* FAST_MATH */
+            double originalPhiPrev = FastArcTan2(static_cast<double>(Pi0),
+                                         static_cast<double>(Pr0));
+            double phiPrev = originalPhiPrev;
+#endif
+            sumPhi += phiPrev;
+            count   = 1;
 
-            double cfoRadPerSym = phi / static_cast<double>(Lh);
+            // Walk neighbors, unwrap relative to previous
+            for (int dd = d0 - 1; dd >= left; --dd) {
+                SHReal Prd = PRe[dd];
+                SHReal Pid = PIm[dd];
+#ifndef FAST_MATH
+                double phi = std::atan2(static_cast<double>(Pid),
+                                        static_cast<double>(Prd));
+#else
+                double phi = FastArcTan2(static_cast<double>(Pid),
+                                         static_cast<double>(Prd));
+#endif
+                double diff = phi - phiPrev;
+                if (diff > PI) {
+                    phi -= 2.0 * PI;
+                } else if (diff < -PI) {
+                    phi += 2.0 * PI;
+                }
+                sumPhi += phi;
+                phiPrev = phi;
+                ++count;
+            }
+
+            // Reset previous to central again for the right side
+            phiPrev = originalPhiPrev;
+
+            for (int dd = d0 + 1; dd <= right; ++dd) {
+                SHReal Prd = PRe[dd];
+                SHReal Pid = PIm[dd];
+#ifndef FAST_MATH
+                double phi = std::atan2(static_cast<double>(Pid),
+                                        static_cast<double>(Prd));
+#else
+                double phi = FastArcTan2(static_cast<double>(Pid),
+                                         static_cast<double>(Prd));
+#endif
+                double diff = phi - phiPrev;
+                if (diff > PI) {
+                    phi -= 2.0 * PI;
+                } else if (diff < -PI) {
+                    phi += 2.0 * PI;
+                }
+                sumPhi += phi;
+                phiPrev = phi;
+                ++count;
+            }
+
+            double phiMean = sumPhi / static_cast<double>(count);
+            double cfoRadPerSym = phiMean / static_cast<double>(Lh);
+            // ---------------------------------------------------------
 
             // Convert (off, k) to absolute sample index (1-based) in y
             double startSample = 1.0

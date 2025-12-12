@@ -94,7 +94,7 @@ agc = gain.SimpleAgc( ...
     'AdaptationStepSize', cfg.Agc.AdaptationStepSize, ...
     'TargetPower',        cfg.Agc.TargetPower);
 
-dcblock = filters.FastDcBlocker('Length', 4096);
+dcblock = filters.FastDcBlocker('Length', 16538);
 
 carSyncCoarse = sync.CPPDecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
@@ -127,7 +127,7 @@ metricTrustThresh  = cfg.Cfo.MetricTrustThreshold;
 lastCfoRadPerSymDet = NaN;
 cfoWarnThreshRad    = 0.2;
 
-paySink = sinks.CppPayloadCollectorSink('NumThreads', 1);
+paySink = sinks.CppPayloadCollectorSink('NumThreads', 4);
 
 for kW = 1:numel(cfg.Rx.StreamWriters)
     spec = cfg.Rx.StreamWriters(kW);
