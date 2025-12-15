@@ -103,14 +103,6 @@ cfg.SDR.RxIPAddress = '192.168.10.4';
 
 cfg.Tx.StreamSpecs = struct([]);
 
-% Example: Stream 0 sends a repeating text message via FixedMessageReader
-% cfg.Tx.StreamSpecs(1).StreamId = uint8(0);
-% cfg.Tx.StreamSpecs(1).Reader   = io.FixedMessageReader('Hello from TX via USRP!', true);
-
-% cfg.Tx.StreamSpecs(1).Reader = io.FileChunkReader(...
-%     'U:\Chalmers\MCC125\codes\shirzad\test1.rar', ...
-%     uint8(1), 700, true);
-
 fileName    = 'U:\Chalmers\MCC125\codes\shirzad\hoho.pdf';
 % fileName    = 'U:\Chalmers\MCC125\codes\shirzad\test1.rar';
 baseStream  = 0;      % streams will be 0,1,2,3
@@ -135,7 +127,6 @@ for i = 1:numStreams
     cfg.Rx.StreamWriters(i).Writer     = io.FileChunkWriter(...
         filetransfer.FileAssembler(uint8(1), ...
         io.FileWriter('U:\Chalmers\MCC125\codes\shirzad\test12.rar')), 200);
-    % cfg.Rx.StreamWriters(1).Writer = io.ConsoleWriter();
     cfg.Rx.StreamWriters(i).CloseOnEnd = false;
 end
 

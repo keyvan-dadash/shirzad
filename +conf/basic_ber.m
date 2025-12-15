@@ -21,13 +21,13 @@ cfg.Link.Fs              = cfg.Link.MasterClockRate / cfg.Link.Decim;  % RX Fs
 cfg.Link.Sps       = 4;            % samples per symbol
 cfg.Link.RrcBeta   = 0.8;          % RRC roll-off
 cfg.Link.RrcSpan   = 10;            % RRC span (symbols)
-cfg.Link.TxGain_dB = 2;
-cfg.Link.RxGain_dB = 6;
+cfg.Link.TxGain_dB = 0;
+cfg.Link.RxGain_dB = 1;
 
 %% ---------- Modulation ----------
 % Name is used with getMmodulator/getDemodulator
 % Supported by your helper: 'qpsk', '16-qam', '32-qam'
-cfg.Modulation.Name = '16-qam';
+cfg.Modulation.Name = 'qpsk';
 
 bps = 0;
 
@@ -65,10 +65,10 @@ cfg.Frame.MsgCapBytes     = cfg.ethernetPayloadLenght * cfg.Fec.Rate ...
 cfg.Frame.MseqDegree      = 11;      % for m-sequence preamble
 cfg.Frame.MseqSeed        = 1001;   % RNG seed used in training generator
 
-cfg.Link.SamplesPerFrame = (2*cfg.Frame.PreambleHalfLen + cfg.Frame.PayloadSyms) * 32 ...
+cfg.Link.SamplesPerFrame = (2*cfg.Frame.PreambleHalfLen + cfg.Frame.PayloadSyms) * 64 ...
     * cfg.Link.Sps;    % SDRu RX frame size
 
-cfg.Frame.PilotAmpOffset  = 0.2;    % DC offset added to frame symbols (TX)
+cfg.Frame.PilotAmpOffset  = 0.1;    % DC offset added to frame symbols (TX)
 
 %% ---------- AGC ----------
 cfg.Agc.AveragingLength    = 1000;
@@ -103,14 +103,9 @@ cfg.SDR.RxIPAddress = '192.168.10.4';
 
 cfg.Tx.StreamSpecs = struct([]);
 
-fileName    = 'U:\Chalmers\MCC125\codes\shirzad\hoho.pdf';
-baseStream  = 0;      % streams will be 0,1,2,3
-baseFileId  = 1;      % fileIds will be 1,2,3,4
-maxDataBytes = 700;
-numStreams   = 4;
-loop         = false; % no looping over file
-
-cfg = addParallelFileStreams(cfg, fileName, baseStream, baseFileId, maxDataBytes, numStreams, loop);
+% Example: Stream 0 sends a repeating text message via FixedMessageReader
+cfg.Tx.StreamSpecs(1).StreamId = uint8(0);
+cfg.Tx.StreamSpecs(1).Reader   = io.FixedMessageReader('Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed dictum augue sed lectus finibus tempor. Nulla eros risus, congue sit amet arcu vitae, porttitor molestie ipsum. Orci varius natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Nunc iaculis eget ligula non consectetur. Curabitur lacus turpis, molestie cursus pellentesque non, scelerisque eget dui. Morbi vel malesuada odio, vitae lacinia urna. Ut iaculis neque eu blandit dignissim. Mauris pretium lacus metus, in euismod dui pulvinar nec. Nulla placerat auctor diam, vel dignissim erat ultricies vitae. Vestibulum malesuada neque leo, eu mattis dui eleifend id. Morbi vel commodo justo, quis volutpat lacus. Aliquam mollis nunc ante, maximus tristique eu.', true);
 
 %% ---------- Application / Streams (RX side) ----------
 % Each entry for RX side must have:
@@ -120,13 +115,8 @@ cfg = addParallelFileStreams(cfg, fileName, baseStream, baseFileId, maxDataBytes
 
 cfg.Rx.StreamWriters = struct([]);
 
-% Example: Stream 0 -> console output
-for i = 1:numStreams
-    cfg.Rx.StreamWriters(i).StreamId   = uint8(i - 1);
-    cfg.Rx.StreamWriters(i).Writer     = io.FileChunkWriter(...
-        filetransfer.FileAssembler(uint8(1), ...
-        io.FileWriter('U:\Chalmers\MCC125\codes\shirzad\test12.rar')), 200);
-    cfg.Rx.StreamWriters(i).CloseOnEnd = false;
-end
+cfg.Rx.StreamWriters(1).StreamId   = uint8(0);
+cfg.Rx.StreamWriters(1).Writer = io.ConsoleWriter();
+cfg.Rx.StreamWriters(1).CloseOnEnd = false;
 
 end

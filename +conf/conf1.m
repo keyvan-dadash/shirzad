@@ -102,10 +102,6 @@ cfg.Tx.StreamSpecs = struct([]);
 cfg.Tx.StreamSpecs(1).StreamId = uint8(0);
 cfg.Tx.StreamSpecs(1).Reader   = io.FixedMessageReader('Hello from TX via USRP!', true);
 
-% cfg.Tx.StreamSpecs(1).Reader = io.FileChunkReader(...
-%     'U:\Chalmers\MCC125\codes\shirzad\test11.rar', ...
-%     uint8(1), 22, true);
-
 %% ---------- Application / Streams (RX side) ----------
 % Each entry for RX side must have:
 %   StreamId (uint8), Writer (io.Writer subclass), CloseOnEnd (logical)
@@ -116,9 +112,6 @@ cfg.Rx.StreamWriters = struct([]);
 
 % Example: Stream 0 -> console output
 cfg.Rx.StreamWriters(1).StreamId   = uint8(0);
-% cfg.Rx.StreamWriters(1).Writer     = io.FileChunkWriter(...
-%     filetransfer.FileAssembler(uint8(1), ...
-%     io.FileWriter('U:\Chalmers\MCC125\codes\shirzad\test12.rar')));
 cfg.Rx.StreamWriters(1).Writer = io.ConsoleWriter();
 cfg.Rx.StreamWriters(1).CloseOnEnd = false;
 
