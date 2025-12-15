@@ -22,9 +22,6 @@ viterbi_k3_7_8_decode(const std::vector<std::uint8_t>& v)
             N);
     }
 
-    goLog(
-            "hiiiiii");
-
     const int blocks = static_cast<int>(N / 8);
     const int T      = 7 * blocks;   // trellis steps
     const int MEM    = 2;
