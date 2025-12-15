@@ -112,7 +112,7 @@ agc = gain.SimpleAgc( ...
     'AdaptationStepSize', cfg.Agc.AdaptationStepSize, ...
     'TargetPower',        cfg.Agc.TargetPower);
 
-dcblock = filters.FastDcBlocker('Length', 20000);
+dcblock = filters.FastDcBlocker('Length', 8192);
 
 carSyncCoarse = sync.CPPDecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
@@ -229,7 +229,15 @@ isSuperCoarseReady = false;
 sampleIndex        = 0;
 
 prof = utils.EventProfiler();
-old_frames = 0;
+
+snrPrintEvery = 50;                 % print every N accepted frames
+snrCount      = 0;
+
+snr_dB_hist   = [];                 % store per frame (same as EsN0 here)
+esn0_dB_hist  = [];
+ebn0_dB_hist  = [];
+
+Rcode = cfg.Fec.Rate;               % coding rate
 
 %% ---------- Main RX loop ----------
 while true
@@ -246,7 +254,7 @@ while true
 
     % continue;
 
-    % sa(xRaw);
+    sa(xRaw);
     % continue;
     % fprintf('the size of buff is: %d\n', numel(xRaw));
 
@@ -258,7 +266,7 @@ while true
         sampleIndex = sampleIndex + N;
     end
 
-     sa(xRaw);
+     % sa(xRaw);
 
     if ~isSuperCoarseReady
         coarseBuff = [coarseBuff; xRaw];
@@ -445,6 +453,9 @@ while true
         acceptedWSym_sc    = [];
         acceptedMetric     = [];
         acceptedTheta      = [];
+        acceptedSNRdB  = [];
+        acceptedEsN0dB = [];
+        acceptedEbN0dB = [];
 
         for jj = 1:numel(candIdxValid)
             ic   = candIdxValid(jj);    % index into candList
@@ -481,6 +492,28 @@ while true
                 %         cCorr, cand.StartSample);
                 continue;
             end
+%% Calculate SNR
+            x = preSyms(:);        % known reference (Nx1)
+            y = candPre(:);        % received preamble (Nx1)
+            
+            % LS complex gain estimate: y ≈ a*x + n
+            a_hat = (x' * y) / (x' * x + eps);
+            
+            % Error (noise+impairments not explained by a_hat*x)
+            e = y - a_hat * x;
+            
+            Ps = mean(abs(a_hat*x).^2);         % estimated signal power
+            Pn = mean(abs(e).^2) + eps;         % estimated noise/error power
+            
+            esn0_lin = Ps / Pn;
+            esn0_dB  = 10*log10(esn0_lin);
+            
+            % At 1 sample/symbol after matched filter, SNR ≈ Es/N0
+            snr_dB = esn0_dB;
+            
+            % Eb/N0 (information-bit Eb) for coded system:
+            %   Eb = Es / (bps * Rcode)  => Eb/N0 = Es/N0 - 10log10(bps*Rcode)
+            ebn0_dB = esn0_dB - 10*log10(bps * Rcode);
 
             % If we get here, we accept this frame for PLL/decoding
             acceptedIdx(end+1)        = ic;              %#ok<AGROW>
@@ -491,6 +524,9 @@ while true
             acceptedWSym_sc(end+1)    = cand.CfoRadPerSym; %#ok<AGROW>
             acceptedMetric(end+1)     = cand.Metric;     %#ok<AGROW>
             acceptedTheta(end+1)      = angle(h);
+            acceptedSNRdB(end+1)  = snr_dB;
+            acceptedEsN0dB(end+1) = esn0_dB;
+            acceptedEbN0dB(end+1) = ebn0_dB;
 
             % prof.stop('frameProcess');
         end
@@ -512,8 +548,10 @@ while true
             ySymC = ySymCfoCell{off+1};
             s0    = acceptedPayStart(k);
             s1    = acceptedPayEnd(k);
+            theta = acceptedTheta(k);
 
-            seg   = ySymC(s0:s1);
+            % seg   = ySymC(s0:s1);
+            seg = ySymC(s0:s1) .* exp(-1j*theta);
             segStartIdx(k) = numel(bigPayRaw) + 1;
             segLen(k)      = numel(seg);
             bigPayRaw      = [bigPayRaw; seg]; %#ok<AGROW>
@@ -534,10 +572,7 @@ while true
             idx0 = segStartIdx(k);
             idx1 = idx0 + segLen(k) - 1;
             rxSyms_eq = bigPayEq(idx0:idx1);
-
-            theta = acceptedTheta(k);
-            ph = exp(-1j * theta);
-            rxSyms_eq = ph * rxSyms_eq;
+            %
 
             %% ---------- frame-level processing ----------
             % prof.start('frameProcess2');
@@ -550,6 +585,20 @@ while true
             constDiag(rxSyms);
 
             frames = frames + 1;
+
+            snrCount = snrCount + 1; 
+
+            snr_dB_hist(snrCount)  = acceptedSNRdB(k);
+            esn0_dB_hist(snrCount) = acceptedEsN0dB(k);
+            ebn0_dB_hist(snrCount) = acceptedEbN0dB(k);
+            
+            if mod(snrCount, snrPrintEvery) == 0
+                fprintf('SNR≈%.2f dB | Es/N0≈%.2f dB | Eb/N0≈%.2f dB (avg over last %d)\n', ...
+                    mean(snr_dB_hist(end-snrPrintEvery+1:end)), ...
+                    mean(esn0_dB_hist(end-snrPrintEvery+1:end)), ...
+                    mean(ebn0_dB_hist(end-snrPrintEvery+1:end)), ...
+                    snrPrintEvery);
+            end
 
             %% ---------- Payload decode: symbols -> coded bits ----------
             % t0 = tic;
