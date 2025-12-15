@@ -33,7 +33,7 @@ classdef SDRuBasebandSource < sources.AbstractSource
             p.addParameter('TransportDataType','int16',        @(s)ischar(s)||isstring(s));
             p.addParameter('OutputDataType',   'double',       @(s)ischar(s)||isstring(s));
             p.addParameter('EnableBurstMode',  false,          @islogical);
-            p.addParameter('Antenna',          'RX2',          @(s)ischar(s)||isstring(s));
+            p.addParameter('Antenna',          'RX1',          @(s)ischar(s)||isstring(s));
             p.addParameter('NumWarmupFrames',  10,             @isnumeric);
             p.parse(varargin{:});
 
