@@ -86,15 +86,13 @@ Rsym = Fs / sps;
 
 rrcDet = filters.RootRaisedCosineFilter(beta, span, sps);
 
-dc3 = dsp.DCBlocker(Algorithm="Subtract mean");
-
 agc = gain.SimpleAgc( ...
     'AveragingLength',    cfg.Agc.AveragingLength, ...
     'MaximumGain_dB',     cfg.Agc.MaximumGain_dB, ...
     'AdaptationStepSize', cfg.Agc.AdaptationStepSize, ...
     'TargetPower',        cfg.Agc.TargetPower);
 
-dcblock = filters.FastDcBlocker('Length', 16538);
+dcblock = filters.FastDcBlocker('Length', 8192);
 
 carSyncCoarse = sync.CPPDecisionDirectedCarrierSync( ...
     'ModulationOrder',        M, ...
@@ -166,7 +164,6 @@ frames = 0;
 frameSam   = frameSyms * sps;
 maxHoldSam = 500*frameSam + 8*sps + span*sps;
 
-% Preallocated circular buffer for filtered samples
 yDetBuf = utils.CircularComplexBuffer(maxHoldSam);
 
 coarseBuff = [];
@@ -176,15 +173,10 @@ superCoarseFreq    = 0;
 isSuperCoarseReady = false;
 sampleIndex        = 0;
 
-% for faster cfo
-dphi            = 0;                % phase step per sample
-cfoPhasorFrame  = [];               % template phasor for one frame
-cfoZ0           = 1;                % starting phasor for current chunk
-cfoZstepFrame   = 1;                % phase jump per full SamplesPerFrame
-
-profile off;
-% profile clear;
-% profile on;
+dphi            = 0;
+cfoPhasorFrame  = [];
+cfoZ0           = 1;
+cfoZstepFrame   = 1;
 
 while true
     [xRaw, len, over] = rfSrc.readFrame();
@@ -192,7 +184,6 @@ while true
     if over
         fprintf('Overrun/short read (%d < %d), resetting RX state\n', ...
             numel(xRaw), SamplesPerFrame);
-        % profile off;
         continue;
     end
 
@@ -228,7 +219,6 @@ while true
     end
 
     xDC = dcblock.process(xRaw);
-    % xDC = dc3(xRaw);
 
     if ~useFine
         xAGC = agc.process(xDC);
@@ -238,22 +228,18 @@ while true
 
     yDet = rrcDet.process(xAGC);
 
-    % Append filtered samples into circular buffer (auto-drops oldest if needed)
     yDetBuf.append(yDet);
 
     while true
-        % Need at least one full frame worth of samples
         if yDetBuf.Length < frameSam
             break;
         end
 
-        % Snapshot current buffer contents as contiguous vector
         yDetVec = yDetBuf.toVector();
 
         candList = preDet.detectCandidates(yDetVec);
 
         if isempty(candList)
-            % Keep only last Lpre*sps samples, drop older ones
             keepSam = Lpre * sps;
             if yDetBuf.Length <= keepSam
                 break;
@@ -341,6 +327,7 @@ while true
         acceptedPayEnd     = [];
         acceptedWSym_sc    = [];
         acceptedMetric     = [];
+        acceptedTheta      = [];
 
         for jj = 1:numel(candIdxValid)
             ic   = candIdxValid(jj);
@@ -361,10 +348,11 @@ while true
             end
 
             candPre = ySym_cfo(preStart:preEndS_i);
-            cCorr   = abs(candPre' * preSyms) / (norm(candPre)*norm(preSyms) + eps);
+            h = preSyms' * candPre;
+
+            cCorr   = abs(h) / (norm(candPre)*norm(preSyms) + eps);
 
             if cCorr < 0.7
-                % fprintf('shiiit\n');
                 continue;
             end
 
@@ -375,31 +363,15 @@ while true
             acceptedPayEnd(end+1)     = payEndS_i;
             acceptedWSym_sc(end+1)    = cand.CfoRadPerSym;
             acceptedMetric(end+1)     = cand.Metric;
+            acceptedTheta(end+1)      = angle(h);
         end
 
         if isempty(acceptedIdx)
             break;
         end
 
-        % nAcc = numel(acceptedIdx);
-        % bigPayRaw    = complex([]);
-        % segStartIdx  = zeros(nAcc,1);
-        % segLen       = zeros(nAcc,1);
-        % 
-        % for k = 1:nAcc
-        %     off   = acceptedOffsets(k);
-        %     ySymC = ySymCfoCell{off+1};
-        %     s0    = acceptedPayStart(k);
-        %     s1    = acceptedPayEnd(k);
-        % 
-        %     seg   = ySymC(s0:s1);
-        %     segStartIdx(k) = numel(bigPayRaw) + 1;
-        %     segLen(k)      = numel(seg);
-        %     bigPayRaw      = [bigPayRaw; seg];
-        % end
-
         nAcc = numel(acceptedIdx);
-        segLenPerFrame = payloadSyms;          % constant
+        segLenPerFrame = payloadSyms;
         segLen         = repmat(segLenPerFrame, nAcc, 1);
         totalLen       = nAcc * segLenPerFrame;
         
@@ -411,11 +383,12 @@ while true
             ySymC = ySymCfoCell{off+1};
             s0    = acceptedPayStart(k);
             s1    = s0 + segLenPerFrame - 1;
+            theta = acceptedTheta(k);
         
             idx0 = segStartIdx(k);
             idx1 = idx0 + segLenPerFrame - 1;
-        
-            bigPayRaw(idx0:idx1) = ySymC(s0:s1);
+
+            bigPayRaw(idx0:idx1) = ySymC(s0:s1) .* exp(-1j*theta);
         end
 
         bigPayEq = carSyncNow.process(bigPayRaw);
@@ -429,13 +402,11 @@ while true
             idx1 = idx0 + segLen(k) - 1;
             rxSyms_eq = bigPayEq(idx0:idx1);
 
-            [rxSyms, rotIdx, rotErrs] = dem.resolvePhaseAmbiguity(rxSyms_eq, pilotBits); %#ok<ASGLU>
-
-            % constDiag(rxSyms);
+            [rxSyms, rotIdx, rotErrs] = dem.resolvePhaseAmbiguity(rxSyms_eq, pilotBits);
 
             frames = frames + 1;
 
-            [codedBits, payInfo] = fr.decodeFromPayload(rxSyms); %#ok<NASGU>
+            [codedBits, payInfo] = fr.decodeFromPayload(rxSyms);
 
             paySink.writeFrame(codedBits, struct('FrameIndex', frames));
 
