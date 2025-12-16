@@ -9,7 +9,7 @@
 #include "payload_worker_common.hpp"
 #include "utils.hpp"
 
-// Must match exactly what TX sends in FixedMessageReader
+// Payload that should match the TX side so we can calculate the ber.
 #define FIXED_EXPECTED_PAYLOAD \
 "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed dictum augue sed lectus finibus tempor. Nulla eros risus, congue sit amet arcu vitae, porttitor molestie ipsum. Orci varius natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Nunc iaculis eget ligula non consectetur. Curabitur lacus turpis, molestie cursus pellentesque non, scelerisque eget dui. Morbi vel malesuada odio, vitae lacinia urna. Ut iaculis neque eu blandit dignissim. Mauris pretium lacus metus, in euismod dui pulvinar nec. Nulla placerat auctor diam, vel dignissim erat ultricies vitae. Vestibulum malesuada neque leo, eu mattis dui eleifend id. Morbi vel commodo justo, quis volutpat lacus. Aliquam mollis nunc ante, maximus tristique eu."
 
@@ -54,9 +54,6 @@ struct FixedPayloadBerWorker : public IWorker {
         const auto& exp = expected();
         const std::size_t nEx = exp.size();
 
-        // IMPORTANT FIX:
-        // - Use dg.payload.size() as the authoritative length.
-        // - Only cap by dg.payloadLen if dg.payloadLen is non-zero AND smaller.
         const std::size_t rxVecSize = dg.payload.size();
         std::size_t nRx = rxVecSize;
 
@@ -64,7 +61,6 @@ struct FixedPayloadBerWorker : public IWorker {
             nRx = static_cast<std::size_t>(dg.payloadLen);
         }
 
-        // If nRx is zero, we can't compute BER; log debug info.
         if (nRx == 0) {
             emptyPkts++;
             if ((pktCount % 1000ull) == 0ull) {
@@ -92,7 +88,6 @@ struct FixedPayloadBerWorker : public IWorker {
             errThis += popcnt8(static_cast<std::uint8_t>(dg.payload[i] ^ exp[i]));
         }
 
-        // BER is computed over the bits we actually compared (overlap only)
         const std::uint64_t bitsThis = 8ull * static_cast<std::uint64_t>(nMin);
 
         if (nRx != nEx) {

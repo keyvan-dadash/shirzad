@@ -14,7 +14,6 @@ static void demod64qam_core(const SHReal* xReal,
 {
     if (N == 0) return;
 
-    // --- Compute input power for normalization ---
     mwSize i = 0;
     double sumZ2 = 0.0;
     SHVec vsum = SH_SETZERO();
@@ -39,7 +38,7 @@ static void demod64qam_core(const SHReal* xReal,
     double gainMag = std::sqrt(Pz);
     double scale_d = normFactor / gainMag;
 
-    // --- Gray decoding LUT (3 bits per axis) ---
+    // --- Decoding LUT (3 bits per axis) ---
     static const int lut[8][3] = {
         {0,0,0}, // idx 0 -> -7 -> bits 000
         {0,0,1}, // idx 1 -> -5 -> bits 001
@@ -51,7 +50,6 @@ static void demod64qam_core(const SHReal* xReal,
         {1,0,0}  // idx 7 -> +7 -> bits 100
     };
 
-    // --- Hard decision demapping ---
     for (mwSize n = 0; n < N; ++n) {
         double sRe = xReal[n] * scale_d;
         double sIm = xImag[n] * scale_d;
@@ -83,7 +81,6 @@ static void demod64qam_core(const SHReal* xReal,
     }
 }
 
-// --- Mex entry point ---
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[])
 {

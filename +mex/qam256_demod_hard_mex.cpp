@@ -14,7 +14,6 @@ static void demod256qam_core(const SHReal* xReal,
 {
     if (N == 0) return;
 
-    // --- normalization ---
     mwSize i = 0;
     double sumZ2 = 0.0;
     SHVec vsum = SH_SETZERO();
@@ -37,7 +36,7 @@ static void demod256qam_core(const SHReal* xReal,
     double gainMag = std::sqrt(Pz);
     double scale_d = normFactor / gainMag;
 
-    // --- 16-PAM Gray LUT (4 bits per axis) ---
+    // --- 16-PAM LUT (4 bits per axis) ---
     static const int lut[16][4] = {
         {0,0,0,0}, // -15
         {0,0,0,1}, // -13
@@ -76,7 +75,6 @@ static void demod256qam_core(const SHReal* xReal,
         else               return 15;
     };
 
-    // --- Mapping ---
     for (mwSize n = 0; n < N; ++n) {
         double sRe = xReal[n] * scale_d;
         double sIm = xImag[n] * scale_d;
@@ -99,7 +97,6 @@ static void demod256qam_core(const SHReal* xReal,
     }
 }
 
-// Mex entry point
 void mexFunction(int nlhs, mxArray* plhs[],
                  int nrhs, const mxArray* prhs[])
 {
