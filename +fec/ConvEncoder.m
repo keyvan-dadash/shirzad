@@ -2,11 +2,11 @@ classdef ConvEncoder < handle
     % Simple rate-1/2 convolutional encoder.
 
     properties
-        G              % [nOut x K] binary (0/1)
-        K              % constraint length
-        nOut           % number of output bits per input bit
-        Memory         % K-1
-        State          % 1 x (K-1) memory bits (double 0/1)
+        G
+        K
+        nOut
+        Memory
+        State 
     end
 
     methods

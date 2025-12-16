@@ -10,3 +10,5 @@
 // #define SH_USE_SCALAR
 
 //#define K7
+
+#define CALC_BER

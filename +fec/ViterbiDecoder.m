@@ -1,14 +1,14 @@
 classdef ViterbiDecoder < handle
     % Viterbi decoder for binary convolutional code.
     properties
-        G              % [nOut x K] binary
-        K              % constraint length (3 for our case)
-        nOut           % outputs per input bit
-        Memory         % K-1
-        NumStates      % 2^(K-1)
-        StateBits      % [NumStates x Memory] representation of each state
-        NextState      % [NumStates x 2] for input bit 0/1
-        OutputBits     % [NumStates x 2 x nOut] expected outputs
+        G
+        K
+        nOut
+        Memory
+        NumStates
+        StateBits
+        NextState
+        OutputBits
     end
 
     methods

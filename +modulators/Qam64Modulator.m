@@ -5,7 +5,7 @@ classdef Qam64Modulator < modulators.AbstractModulator
     %   [b5 b4 b3 b2 b1 b0]
     %   Q uses [b5 b4 b3], I uses [b2 b1 b0]
     %
-    % 3-bit to 8-PAM Gray mapping per axis:
+    % 3-bit to 8-PAM mapping per axis:
     %   000 -> -7
     %   001 -> -5
     %   011 -> -3
@@ -35,7 +35,7 @@ classdef Qam64Modulator < modulators.AbstractModulator
                       numel(b), B);
             end
 
-            bitsMat = reshape(b, B, []).'; % [Nsym x 6]
+            bitsMat = reshape(b, B, []).';
 
             % Q uses [b5 b4 b3], I uses [b2 b1 b0]
             qBits = bitsMat(:,1:3);
@@ -57,7 +57,6 @@ classdef Qam64Modulator < modulators.AbstractModulator
                       'Input must have 3 columns of bits.');
             end
             val = b3(:,1)*4 + b3(:,2)*2 + b3(:,3);
-            % Gray-coded mapping
             map = [-7; -5; -3; -1; +7; +5; +3; +1];
             pam = map(val+1);
         end

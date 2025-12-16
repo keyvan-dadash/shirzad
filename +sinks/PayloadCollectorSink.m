@@ -1,13 +1,5 @@
 classdef PayloadCollectorSink < sinks.AbstractSink
     % PayloadCollectorSink
-    %
-    % On RX side this acts as a "datagram demux":
-    %   - Input  : fixed-size datagram bytes (uint8) per frame
-    %   - Parses : protocol.Datagram
-    %   - Output : dispatches pkt.Payload to a registered io.Writer
-    %              based on pkt.StreamId.
-    %
-    % It can also keep a history of the raw datagram bytes for debugging.
 
     properties
         % If true, keep raw datagram bytes in Frames{} for debugging
@@ -142,9 +134,6 @@ classdef PayloadCollectorSink < sinks.AbstractSink
         end
 
         function bits = concatenateAll(obj)
-            % For compatibility with old API:
-            % interpret stored Frames as bytes and just concatenate them.
-            % (If you don't want this, you can delete this method.)
             if ~obj.StoreHistory
                 error('PayloadCollectorSink:NoHistory', ...
                       'History is not being stored (StoreHistory=false).');

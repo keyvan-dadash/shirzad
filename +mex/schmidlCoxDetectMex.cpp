@@ -57,13 +57,13 @@ void mexFunction(int nlhs, mxArray* plhs[],
         mexErrMsgIdAndTxt("schmidlCoxDetectMex:InvalidY",
                           "Input y must be complex single when compiled with SH_USE_FLOAT.");
     }
-    mxComplexSingle* yc = mxGetComplexSingles(y_in);   // interleaved complex single
+    mxComplexSingle* yc = mxGetComplexSingles(y_in);
 #else
     if (!mxIsDouble(y_in) || !mxIsComplex(y_in)) {
         mexErrMsgIdAndTxt("schmidlCoxDetectMex:InvalidY",
                           "Input y must be complex double.");
     }
-    mxComplexDouble* yc = mxGetComplexDoubles(y_in);   // interleaved complex double
+    mxComplexDouble* yc = mxGetComplexDoubles(y_in);
 #endif
 
     const mwSize N = mxGetNumberOfElements(y_in);
@@ -78,7 +78,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
                           "sps and Lh must be positive.");
     }
 
-    // No samples
     if (N == 0) {
         plhs[0] = createCandidateStructArray(0);
         return;
@@ -89,7 +88,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
     const double Lpre    = 2.0 * static_cast<double>(Lh);
     const double maxSpan = Lpre / 2.0; // grouping span in samples in choosing candidates (Lpre/2)
 
-    // Symbol-rate data is now accessed directly from yc (no ySymRe/ySymIm).
     std::vector<SHReal> qRe, qIm;
     std::vector<SHReal> pow;
     std::vector<SHReal> PRe, PIm;
@@ -119,7 +117,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
             continue;
         }
 
-        int Lwin = Ns - 2 * Lh;   // number of positions for sliding window
+        int Lwin = Ns - 2 * Lh;
         if (Lwin <= 0) {
             continue;
         }
@@ -135,7 +133,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
         // ----------------------------------------------------
         // q(n) = y(n) * conj(y(n+Lh)), pow(n) = |y(n)|^2
-        // Directly from yc with stride = sps (no ySymRe/ySymIm).
         // ----------------------------------------------------
         int n = 0;
 
@@ -255,7 +252,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
             pow[n] = ar * ar + ai * ai;
         }
 
-        // Now fill pow for n = Nq..Ns-1 (no qRe/qIm needed here)
+        // Now fill pow for n = Nq..Ns-1
         int m = Nq;
         int Ns4 = Ns & ~3;   // largest multiple of 4 <= Ns
 
@@ -311,7 +308,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
         PIm.resize(Lwin);
         R.resize(Lwin);
 
-        // P(d) sliding sum over qRe/qIm
         SHVec sumPr_v = SH_SETZERO();
         SHVec sumPi_v = SH_SETZERO();
 
@@ -336,7 +332,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
             sumPi += tmpPi[i];
         }
 
-        // tail data for initial window
         for (; t < Lh; ++t) {
             sumPr += qRe[t];
             sumPi += qIm[t];
@@ -371,7 +366,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
             }
         }
 
-        // Tail for P(d)
         for (; d < Lwin; ++d) {
             sumPr += qRe[d + Lh - 1] - qRe[d - 1];
             sumPi += qIm[d + Lh - 1] - qIm[d - 1];
@@ -380,7 +374,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
             PIm[d] = sumPi;
         }
 
-        // R(d) sliding sum over pow, length 2*Lh
         SHVec sumR_v = SH_SETZERO();
         int u = 0;
         for (; u + (SH_LANES - 1) < Lh2; u += SH_LANES) {
@@ -418,7 +411,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
             }
         }
 
-        // Tail for R(d)
         for (; d < Lwin; ++d) {
             sumR += pow[d + Lh2 - 1] - pow[d - 1];
             R[d] = sumR;
@@ -450,7 +442,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
                 continue;
             }
 
-            // Local maxima condition: M(k) > M(k-1) and M(k) > M(k+1)
             if (k > 0 && metric <= M[k - 1]) {
                 continue;
             }
@@ -471,7 +462,6 @@ void mexFunction(int nlhs, mxArray* plhs[],
 
             double cfoRadPerSym = phi / static_cast<double>(Lh);
 
-            // Convert (off, k) to absolute sample index (1-based) in y
             double startSample = 1.0
                                + static_cast<double>(off)
                                + static_cast<double>(k) * static_cast<double>(sps);
@@ -479,7 +469,7 @@ void mexFunction(int nlhs, mxArray* plhs[],
             Candidate c;
             c.startSample      = startSample;
             c.sampleOffset     = off;
-            c.preambleStartSym = k + 1;  // 1-based
+            c.preambleStartSym = k + 1;
             c.metric           = static_cast<double>(metric);
             c.windowPower      = static_cast<double>(Rv);
             c.cfoRadPerSym     = cfoRadPerSym;

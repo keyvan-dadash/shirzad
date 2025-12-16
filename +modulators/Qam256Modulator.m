@@ -5,7 +5,7 @@ classdef Qam256Modulator < modulators.AbstractModulator
     %   [b7 b6 b5 b4 b3 b2 b1 b0]
     %   Q uses [b7 b6 b5 b4], I uses [b3 b2 b1 b0]
     %
-    % 4-bit to 16-PAM Gray mapping per axis:
+    % 4-bit to 16-PAM mapping per axis:
     %   0000 -> -15
     %   0001 -> -13
     %   0011 -> -11
@@ -35,7 +35,7 @@ classdef Qam256Modulator < modulators.AbstractModulator
             end
 
             b = double(bits(:));
-            B = obj.BitsPerSymbol; % 8
+            B = obj.BitsPerSymbol;
 
             if mod(numel(b), B) ~= 0
                 error('Qam256Modulator:BitLength', ...
@@ -43,7 +43,7 @@ classdef Qam256Modulator < modulators.AbstractModulator
                       numel(b), B);
             end
 
-            bitsMat = reshape(b, B, []).'; % [Nsym x 8]
+            bitsMat = reshape(b, B, []).';
 
             % Q uses [b7 b6 b5 b4], I uses [b3 b2 b1 b0]
             qBits = bitsMat(:,1:4);
@@ -65,7 +65,6 @@ classdef Qam256Modulator < modulators.AbstractModulator
                       'Input must have 4 columns of bits.');
             end
             val = b4(:,1)*8 + b4(:,2)*4 + b4(:,3)*2 + b4(:,4);
-            % 16-PAM Gray-coded mapping
             map = [-15; -13; -11; -9; -7; -5; -3; -1; ...
                     +15; +13; +11; +9; +7; +5; +3; +1];
             pam = map(val+1);

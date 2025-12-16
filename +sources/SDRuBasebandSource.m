@@ -33,7 +33,7 @@ classdef SDRuBasebandSource < sources.AbstractSource
             p.addParameter('TransportDataType','int16',        @(s)ischar(s)||isstring(s));
             p.addParameter('OutputDataType',   'double',       @(s)ischar(s)||isstring(s));
             p.addParameter('EnableBurstMode',  false,          @islogical);
-            p.addParameter('Antenna',          'RX2',          @(s)ischar(s)||isstring(s));
+            p.addParameter('Antenna',          'RX1',          @(s)ischar(s)||isstring(s));
             p.addParameter('NumWarmupFrames',  10,             @isnumeric);
             p.parse(varargin{:});
 
@@ -59,6 +59,10 @@ classdef SDRuBasebandSource < sources.AbstractSource
         end
 
         function [x, len, over] = readFrame(obj)
+            % commented these to increase the performance
+            % it can be uncommented so that it follows the abstract method
+            % signituare
+
             % if isempty(obj.RxObj)
             %     error('SDRuBasebandSource:NotInitialized', ...
             %           'Receiver object has not been created.');

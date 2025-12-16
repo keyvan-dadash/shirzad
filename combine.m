@@ -1,4 +1,3 @@
-% Folder with the chunks
 folder = 'U:\Chalmers\MCC125\codes\shirzad';
 
 % Pattern for the chunk files
@@ -8,7 +7,7 @@ if isempty(files)
     error('No files matching file_* found.');
 end
 
-% Extract numeric id from each filename (assumes "file_<id>[.ext]")
+% Extract numeric id from each filename
 ids = zeros(numel(files),1);
 for k = 1:numel(files)
     [~, name, ~] = fileparts(files(k).name);     % strip extension
@@ -23,7 +22,7 @@ end
 files = files(order);
 
 % Output file
-outFile = fullfile(folder, 'test1111111111111111111111.bin');
+outFile = fullfile(folder, 'output.bin');
 fout = fopen(outFile, 'w+b');
 if fout == -1
     error('Could not open output file "%s".', outFile);
@@ -48,5 +47,7 @@ for k = 1:numel(files)
     end
     fclose(fin);
 end
+
+fclose(fout);
 
 fprintf('Combined %d files into %s\n', numel(files), outFile);

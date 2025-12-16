@@ -4,9 +4,8 @@ classdef FixedMessageReader < io.Reader
 
     properties (Access = private)
         msgBytes   % uint8 row vector
-        repeat     % should be repated?
+        repeat     % should be repeated?
         exhausted  % for repeat=false
-        internal
     end
 
     methods
@@ -29,7 +28,6 @@ classdef FixedMessageReader < io.Reader
 
             obj.repeat    = logical(repeat);
             obj.exhausted = false;
-            obj.internal  = uint64(0);
         end
 
         function [data, count, eof] = read(obj, maxBytes)
@@ -47,21 +45,10 @@ classdef FixedMessageReader < io.Reader
                 return;
             end
 
-            obj.internal = obj.internal + 1;
-
-            % base message as char
-            baseStr = char(obj.msgBytes);   % row char
-
-            % append space + decimal counter
-            suffixStr = [' ' num2str(obj.internal)];
-
-            % full message as uint8
-            msgWithCounter = uint8([baseStr suffixStr]);
-
-            nAvail = numel(msgWithCounter);
+            nAvail = numel(obj.msgBytes);
             n      = min(maxBytes, nAvail);
 
-            data  = msgWithCounter(1:n).';
+            data  = obj.msgBytes(1:n).';   % column vector
             count = n;
 
             if obj.repeat

@@ -22,9 +22,6 @@ viterbi_k3_7_8_decode(const std::vector<std::uint8_t>& v)
             N);
     }
 
-    goLog(
-            "hiiiiii");
-
     const int blocks = static_cast<int>(N / 8);
     const int T      = 7 * blocks;   // trellis steps
     const int MEM    = 2;
@@ -41,11 +38,9 @@ viterbi_k3_7_8_decode(const std::vector<std::uint8_t>& v)
     // 2) Expand punctured stream into per-step r0,r1 plus masks
     std::vector<std::uint8_t> r0(T), r1(T), has0(T), has1(T);
 
-    // Your 7/8 puncturing pattern (must match MATLAB puncturer):
-    const int P0[7] = {1,1,0,1,0,1,1}; // g0 kept?
-    const int P1[7] = {1,0,1,0,1,0,0}; // g1 kept?
+    const int P0[7] = {1,1,0,1,0,1,1};
+    const int P1[7] = {1,0,1,0,1,0,0};
 
-    // Optional: sanity check that this really is 8 bits / 7 steps
     int bitsPerPeriod = 0;
     for (int i = 0; i < 7; ++i) {
         bitsPerPeriod += P0[i] + P1[i];
@@ -104,7 +99,6 @@ viterbi_k3_7_8_decode(const std::vector<std::uint8_t>& v)
     std::vector<std::uint8_t> PrevState(static_cast<std::size_t>(T) * S);
     std::vector<std::uint8_t> PrevInput(static_cast<std::size_t>(T) * S);
 
-    // Initialise PM: state 0 is starting state
     for (int s = 0; s < S; ++s) {
         PM_prev[s] = (s == 0) ? 0 : BIG;
     }

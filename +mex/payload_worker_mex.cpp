@@ -14,11 +14,13 @@
 #include "include/queue/blockingconcurrentqueue.h"
 #include "include/datagram_console_worker.hpp"
 #include "include/file_assembler_worker.hpp"
+#include "include/fixed_payload_worker.hpp"
 #include "include/payload_worker_common.hpp"
 #include "include/datagram_parser.hpp"
 #include "include/decoders/viterbit_k3_decoder.h"
 #include "include/decoders/viterbi_k3_7_8_decode.h"
 #include "include/utils.hpp"
+#include "defines.hpp"
 
 #define likely(x)      __builtin_expect(!!(x), 1)
 #define unlikely(x)    __builtin_expect(!!(x), 0)
@@ -72,10 +74,13 @@ try {
         scrambleDescrambleBytes(dataBytes);
 
         Datagram dg;
+
         if (!Datagram::fromBytes(dataBytes, dg)) {
+#ifndef CALC_BER
             goLogWithoutLock(logFile.c_str(), "[WorkerLoop] Bad checksum, StreamId=%u",
                   static_cast<unsigned>(dg.streamId));
             continue;
+#endif
         }
 
         WorkerEntry* entry = nullptr;
@@ -227,7 +232,11 @@ static void cmdAddWorker(int nrhs, const mxArray* prhs[])
 
     std::unique_ptr<IWorker> worker;
     if (type == "console") {
+#ifndef CALC_BER
         worker.reset(new ConsoleWorker());
+#else
+        worker.reset(new FixedPayloadBerWorker());
+#endif /* CALC_BER */
     } else if (type == "file") {
         worker.reset(new FileAssemblerWorker());
     } else {

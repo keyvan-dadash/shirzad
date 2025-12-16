@@ -1,7 +1,7 @@
 function cfg = phyAppConfig()
 
 cfg.Link.fcTx            = 25e6;
-cfg.Link.fcRx            = 25e6 + 1e6;
+cfg.Link.fcRx            = 25e6;
 cfg.Link.MasterClockRate = 100e6;
 cfg.Link.Interp          = 12;
 cfg.Link.Decim           = 12;
@@ -11,9 +11,9 @@ cfg.Link.Sps       = 4;
 cfg.Link.RrcBeta   = 0.8;
 cfg.Link.RrcSpan   = 10;
 cfg.Link.TxGain_dB = 0;
-cfg.Link.RxGain_dB = 0;
+cfg.Link.RxGain_dB = 1;
 
-cfg.Modulation.Name = '16-qam';
+cfg.Modulation.Name = 'qpsk';
 
 bps = 0;
 
@@ -57,10 +57,10 @@ cfg.Agc.MaximumGain_dB     = 30;
 cfg.Agc.AdaptationStepSize = 1e-3;
 cfg.Agc.TargetPower        = 1.0;
 
-cfg.CarrierSync.DampingFactor           = 0.4;
-cfg.CarrierSync.CoarseLoopBandwidthNorm = 0.01;
-cfg.CarrierSync.FineLoopBandwidthNorm   = 0.001;
-cfg.CarrierSync.SwitchToFineAfterFrames = 20;
+cfg.CarrierSync.DampingFactor           = 0.9;
+cfg.CarrierSync.CoarseLoopBandwidthNorm = 0.02;
+cfg.CarrierSync.FineLoopBandwidthNorm   = 0.008;
+cfg.CarrierSync.SwitchToFineAfterFrames = 35;
 
 cfg.PreambleDetector.MetricThreshold = 0.2;
 cfg.PreambleDetector.MinWindowPower  = 5e-3;
@@ -68,30 +68,22 @@ cfg.PreambleDetector.MinWindowPower  = 5e-3;
 cfg.Cfo.SuperCoarseBuffLen   = 16384;
 cfg.Cfo.TrackAlpha           = 0.1;
 cfg.Cfo.MaxJumpHz            = 200;
-cfg.Cfo.MetricTrustThreshold = 0.24;
+cfg.Cfo.MetricTrustThreshold = 0.22;
 
 cfg.SDR.TxIPAddress = '192.168.10.5';
 cfg.SDR.RxIPAddress = '192.168.10.4';
 
 cfg.Tx.StreamSpecs = struct([]);
 
-fileName     = 'U:\Chalmers\MCC125\codes\shirzad\hoho.pdf';
-baseStream   = 0;
-baseFileId   = 1;
-maxDataBytes = 700;
-numStreams   = 4;
-loop         = false;
-
-cfg = addParallelFileStreams(cfg, fileName, baseStream, baseFileId, maxDataBytes, numStreams, loop);
+cfg.Tx.StreamSpecs(1).StreamId = uint8(0);
+cfg.Tx.StreamSpecs(1).Reader   = io.FixedMessageReader( ...
+    'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed dictum augue sed lectus finibus tempor. Nulla eros risus, congue sit amet arcu vitae, porttitor molestie ipsum. Orci varius natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Nunc iaculis eget ligula non consectetur. Curabitur lacus turpis, molestie cursus pellentesque non, scelerisque eget dui. Morbi vel malesuada odio, vitae lacinia urna. Ut iaculis neque eu blandit dignissim. Mauris pretium lacus metus, in euismod dui pulvinar nec. Nulla placerat auctor diam, vel dignissim erat ultricies vitae. Vestibulum malesuada neque leo, eu mattis dui eleifend id. Morbi vel commodo justo, quis volutpat lacus. Aliquam mollis nunc ante, maximus tristique eu.', ...
+    true);
 
 cfg.Rx.StreamWriters = struct([]);
 
-for i = 1:numStreams
-    cfg.Rx.StreamWriters(i).StreamId   = uint8(i - 1);
-    cfg.Rx.StreamWriters(i).Writer     = io.FileChunkWriter( ...
-        filetransfer.FileAssembler(uint8(1), ...
-        io.FileWriter('U:\Chalmers\MCC125\codes\shirzad\test12.rar')), 200);
-    cfg.Rx.StreamWriters(i).CloseOnEnd = false;
-end
+cfg.Rx.StreamWriters(1).StreamId   = uint8(0);
+cfg.Rx.StreamWriters(1).Writer     = io.ConsoleWriter();
+cfg.Rx.StreamWriters(1).CloseOnEnd = false;
 
 end

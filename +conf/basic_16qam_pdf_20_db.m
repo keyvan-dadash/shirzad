@@ -1,7 +1,7 @@
 function cfg = phyAppConfig()
 
 cfg.Link.fcTx            = 25e6;
-cfg.Link.fcRx            = 25e6 + 1e6;
+cfg.Link.fcRx            = 25e6;
 cfg.Link.MasterClockRate = 100e6;
 cfg.Link.Interp          = 12;
 cfg.Link.Decim           = 12;
@@ -10,8 +10,8 @@ cfg.Link.Fs              = cfg.Link.MasterClockRate / cfg.Link.Decim;
 cfg.Link.Sps       = 4;
 cfg.Link.RrcBeta   = 0.8;
 cfg.Link.RrcSpan   = 10;
-cfg.Link.TxGain_dB = 0;
-cfg.Link.RxGain_dB = 0;
+cfg.Link.TxGain_dB = 2;
+cfg.Link.RxGain_dB = 6;
 
 cfg.Modulation.Name = '16-qam';
 
@@ -47,20 +47,20 @@ cfg.Frame.MsgCapBytes     = cfg.ethernetPayloadLenght * cfg.Fec.Rate ...
 cfg.Frame.MseqDegree      = 11;
 cfg.Frame.MseqSeed        = 1001;
 
-cfg.Link.SamplesPerFrame = (2*cfg.Frame.PreambleHalfLen + cfg.Frame.PayloadSyms) * 64 ...
+cfg.Link.SamplesPerFrame = (2*cfg.Frame.PreambleHalfLen + cfg.Frame.PayloadSyms) * 32 ...
     * cfg.Link.Sps;
 
-cfg.Frame.PilotAmpOffset  = 0.1;
+cfg.Frame.PilotAmpOffset  = 0.2;
 
 cfg.Agc.AveragingLength    = 1000;
 cfg.Agc.MaximumGain_dB     = 30;
 cfg.Agc.AdaptationStepSize = 1e-3;
 cfg.Agc.TargetPower        = 1.0;
 
-cfg.CarrierSync.DampingFactor           = 0.4;
-cfg.CarrierSync.CoarseLoopBandwidthNorm = 0.01;
-cfg.CarrierSync.FineLoopBandwidthNorm   = 0.001;
-cfg.CarrierSync.SwitchToFineAfterFrames = 20;
+cfg.CarrierSync.DampingFactor           = 0.9;
+cfg.CarrierSync.CoarseLoopBandwidthNorm = 0.02;
+cfg.CarrierSync.FineLoopBandwidthNorm   = 0.008;
+cfg.CarrierSync.SwitchToFineAfterFrames = 35;
 
 cfg.PreambleDetector.MetricThreshold = 0.2;
 cfg.PreambleDetector.MinWindowPower  = 5e-3;
@@ -68,16 +68,16 @@ cfg.PreambleDetector.MinWindowPower  = 5e-3;
 cfg.Cfo.SuperCoarseBuffLen   = 16384;
 cfg.Cfo.TrackAlpha           = 0.1;
 cfg.Cfo.MaxJumpHz            = 200;
-cfg.Cfo.MetricTrustThreshold = 0.24;
+cfg.Cfo.MetricTrustThreshold = 0.22;
 
 cfg.SDR.TxIPAddress = '192.168.10.5';
 cfg.SDR.RxIPAddress = '192.168.10.4';
 
 cfg.Tx.StreamSpecs = struct([]);
 
-fileName     = 'U:\Chalmers\MCC125\codes\shirzad\hoho.pdf';
-baseStream   = 0;
-baseFileId   = 1;
+fileName    = 'U:\Chalmers\MCC125\codes\shirzad\hoho.pdf';
+baseStream  = 0;
+baseFileId  = 1;
 maxDataBytes = 700;
 numStreams   = 4;
 loop         = false;
@@ -88,7 +88,7 @@ cfg.Rx.StreamWriters = struct([]);
 
 for i = 1:numStreams
     cfg.Rx.StreamWriters(i).StreamId   = uint8(i - 1);
-    cfg.Rx.StreamWriters(i).Writer     = io.FileChunkWriter( ...
+    cfg.Rx.StreamWriters(i).Writer     = io.FileChunkWriter(...
         filetransfer.FileAssembler(uint8(1), ...
         io.FileWriter('U:\Chalmers\MCC125\codes\shirzad\test12.rar')), 200);
     cfg.Rx.StreamWriters(i).CloseOnEnd = false;
