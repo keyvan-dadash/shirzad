@@ -8,11 +8,11 @@ classdef FileChunkReaderSegment < io.Reader
         Fid
         FileName
         FileSize       uint32
-        SegmentStart   uint32   % global start in file
-        SegmentEnd     uint32   % global end in file (exclusive)
-        SegmentSize    uint32   % SegmentEnd - SegmentStart
-        Offset         uint32   % next offset within segment (0..SegmentSize)
-        MaxDataBytes   uint32   % data bytes per chunk
+        SegmentStart   uint32
+        SegmentEnd     uint32
+        SegmentSize    uint32
+        Offset         uint32
+        MaxDataBytes   uint32
         FileId         uint8
         Loop           logical
     end
@@ -48,7 +48,7 @@ classdef FileChunkReaderSegment < io.Reader
             end
             obj.FileSize = uint32(fsz);
 
-            % clamp / validate segment range
+            % validate segment range
             if segmentStart < 0 || segmentStart >= double(obj.FileSize)
                 error('FileChunkReaderSegment:BadSegmentStart', ...
                       'segmentStart (%g) out of range [0,%u).', ...

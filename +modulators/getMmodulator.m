@@ -1,3 +1,4 @@
+% template function for getting a modulator
 function [modulator] = getMmodulator(modulatorName)
 
 modulatorNameLower = lower(modulatorName);

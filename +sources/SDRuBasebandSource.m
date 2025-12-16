@@ -59,6 +59,10 @@ classdef SDRuBasebandSource < sources.AbstractSource
         end
 
         function [x, len, over] = readFrame(obj)
+            % commented these to increase the performance
+            % it can be uncommented so that it follows the abstract method
+            % signituare
+
             % if isempty(obj.RxObj)
             %     error('SDRuBasebandSource:NotInitialized', ...
             %           'Receiver object has not been created.');

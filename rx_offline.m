@@ -40,7 +40,7 @@ mf.chunkLen       = uint32([]);
 mf.chunkOverrun   = logical([]);
 mf.chunkWallTime  = double([]);
 
-maxSeconds = 120;
+maxSeconds = 30;
 maxChunks  = inf;
 printEvery = 50;
 

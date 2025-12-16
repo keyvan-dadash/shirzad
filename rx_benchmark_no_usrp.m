@@ -1,19 +1,4 @@
 function rx_benchmark_circbuf_no_usrp()
-%RX_BENCHMARK_CIRCBUF_NO_USRP
-%   Offline RX throughput benchmark using your CircularComplexBuffer-based
-%   RX implementation (no USRP, no plots).
-%
-%   Pipeline:
-%     1) Build PHY config / frame / FEC as usual.
-%     2) Offline-generate TX frames (same layout as your TX script).
-%     3) Feed concatenated TX waveform into this RX chain:
-%          - Super-coarse CFO
-%          - DC-blocker, AGC, RRC
-%          - CPPCandidateRepeatedPreambleDetector
-%          - CFO correction
-%          - CPPDecisionDirectedCarrierSync (coarse/fine)
-%          - FEC + C++ payload sink
-%     4) Measure frames/s and PHY / APP data rate.
 
 clear; clc;
 profile off;
@@ -22,7 +7,6 @@ profile clear;
 assert(exist('dsp.UDPReceiver','class')==8, ...
     'Install "DSP System Toolbox" for UDP/USRP support.');
 
-%% ---------- PHY config ----------
 cfg = phyAppConfig();
 
 fc              = cfg.Link.fcRx;
@@ -36,11 +20,10 @@ span = cfg.Link.RrcSpan;
 
 preambleHalfLen = cfg.Frame.PreambleHalfLen;
 payloadSyms     = cfg.Frame.PayloadSyms;
-rxGain_dB       = cfg.Link.RxGain_dB; %#ok<NASGU>
+rxGain_dB       = cfg.Link.RxGain_dB;
 
 SamplesPerFrame = cfg.Link.SamplesPerFrame;
 
-%% ---------- Mod / FEC / Frame ----------
 modu = modulators.getMmodulator(cfg.Modulation.Name);
 dem  = demodulators.getDemodulator(cfg.Modulation.Name);
 
@@ -76,12 +59,12 @@ frameSyms   = fr.NumFrameSymbols;
 
 assert(preambleLen == 2*preambleHalfLen, 'RX: preambleLen mismatch.');
 
-infoBitsLen  = fr.Payload.InfoBitsLen;  %#ok<NASGU>
+infoBitsLen  = fr.Payload.InfoBitsLen;
 databitsLen  = fr.Payload.DataBitsLen;
 codedBitsLen = fr.Payload.CodedBitsLen;
 padBitsLen   = fr.Payload.PadBitsLen;
 pilotBits    = fr.Payload.PilotBits;
-pilotBitsLen = numel(pilotBits); %#ok<NASGU>
+pilotBitsLen = numel(pilotBits);
 
 hdrBytes        = double(protocol.Datagram.HEADER_BYTES);
 maxProtoPayload = msgCapBytes - hdrBytes;
@@ -109,22 +92,15 @@ Lpre    = fr.NumPreambleSymbols;
 
 Rsym = Fs / sps;
 
-%% =======================================================================
-%   OFFLINE TX GENERATION (baseband)
-% ========================================================================
-
 scrSeedBits = logical([ ...
         1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 ...
     ]);
 
-
-% Datagram source (same as TX)
 dgramSrc = sources.DatagramSource(msgCapBytes, cfg.Tx.StreamSpecs);
 
-% TX RRC filter
 txRRC = filters.RootRaisedCosineFilter(beta, span, sps);
 
-frameSamUp = frameSyms * sps;   % samples per TX frame
+frameSamUp = frameSyms * sps;
 
 NframesGen   = 5000;   % total TX frames generated offline
 framesTarget = 4000;   % frames to decode for RX benchmark
@@ -139,7 +115,6 @@ widx = 1;
 %     'Name', 'RX Constellation (post-PLL, post-phase-fix)', ...
 %     'XLimits', [-2 2], ...
 %     'YLimits', [-2 2]);
-
 
 for n = 1:NframesGen
     [protoBytesTX, ~] = dgramSrc.readFrame();
@@ -165,10 +140,6 @@ readOffset   = 0;
 
 fprintf('Offline TX buffer: %d samples (%.3f s @ Fs=%.0f Hz)\n\n', ...
     totalSamples, totalSamples/Fs, Fs);
-
-%% =======================================================================
-%   RX CHAIN (your CircularComplexBuffer-based implementation)
-% ========================================================================
 
 rrcDet = filters.RootRaisedCosineFilter(beta, span, sps);
 
@@ -210,7 +181,6 @@ metricTrustThresh  = cfg.Cfo.MetricTrustThreshold;
 lastCfoRadPerSymDet = NaN;
 cfoWarnThreshRad    = 0.2;
 
-% C++ payload sink
 paySink = sinks.CppPayloadCollectorSink('NumThreads', 8);
 for kW = 1:numel(cfg.Rx.StreamWriters)
     spec = cfg.Rx.StreamWriters(kW);
@@ -225,9 +195,6 @@ for kW = 1:numel(cfg.Rx.StreamWriters)
     paySink.registerWriter(spec.StreamId, spec.Writer, ...
                            'CloseOnEnd', closeOnEnd, extra{:});
 end
-
-% (constellation diagram is unused in benchmark)
-% constDiag = comm.ConstellationDiagram(...)
 
 disp('RX BENCH: processing offline data (Circular buffer, no USRP)...');
 
@@ -248,17 +215,12 @@ sampleIndex        = 0;
 
 done = false;
 
-% profile on;   % if you want profiling, uncomment
-
-%% ---------- Benchmark timer ----------
 % profile clear;
 % profile on;
 low_corr= 0;
 tStart = tic;
 
-%% ---------- Main RX loop (offline source instead of rfSrc) ----------
 while ~done
-    % Emulate rfSrc.readFrame() from offline buffer
     if readOffset >= totalSamples
         fprintf('RX BENCH: ran out of offline samples at %d.\n', readOffset);
         break;
@@ -266,11 +228,10 @@ while ~done
 
     Nread = min(SamplesPerFrame, totalSamples - readOffset);
     xRaw  = txWaveAll(readOffset+1 : readOffset+Nread);
-    len   = Nread; %#ok<NASGU>
-    over  = false; %#ok<NASGU>
+    len   = Nread;
+    over  = false;
     readOffset = readOffset + Nread;
 
-    % --- Super-coarse CFO ---
     if isSuperCoarseReady && superCoarseFreq ~= 0
         N = numel(xRaw);
         n = (0:N-1).' + sampleIndex;
@@ -294,7 +255,6 @@ while ~done
         end
     end
 
-    % --- DC + AGC + RRC ---
     xDC = dcblock.process(xRaw);
     if ~useFine
         xAGC = agc.process(xDC);
@@ -303,16 +263,13 @@ while ~done
     end
     yDet = rrcDet.process(xAGC);
 
-    % Append into circular buffer (auto-drops oldest if needed)
     yDetBuf.append(yDet);
 
-    %% ---------- Process all complete frames in yDetBuf ----------
     while true
         if yDetBuf.Length < frameSam
             break;
         end
 
-        % Snapshot current buffer contents
         yDetVec = yDetBuf.toVector();
 
         candList = preDet.detectCandidates(yDetVec);
@@ -463,14 +420,6 @@ while ~done
             bigPayRaw      = [bigPayRaw; seg];
         end
 
-        % Here
-        % maxDropSamples = max(acceptedLastSample(:));
-        % dropSamples = min(maxDropSamples, yDetBuf.Length);
-        % yDetBuf.dropFirst(dropSamples);
-        % frames = frames + nAcc;
-        % continue;
-
-
         bigPayEq = carSyncNow.process(bigPayRaw);
 
         maxDropSamples = 0;
@@ -558,7 +507,6 @@ fprintf('skipped things: %d\n', low_corr);
 % profile off;
 % profile viewer;
 
-%% ---------- Throughput summary ----------
 fprintf('\nRX BENCH RESULTS (Circular buffer, no USRP):\n');
 fprintf('  Frames decoded  : %d (target=%d)\n', frames, framesTarget);
 fprintf('  Elapsed time    : %.3f s\n', elapsed);

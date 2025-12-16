@@ -6,9 +6,9 @@ classdef testQam256ModDemod < matlab.unittest.TestCase
 
             B = mod.BitsPerSymbol;
 
-            bitsAll = de2bi(0:255, B, 'left-msb');  % [256 x 8]
-            bitsIn  = bitsAll.';                    % [8 x 256]
-            bitsIn  = bitsIn(:);                    % [2048 x 1]
+            bitsAll = de2bi(0:255, B, 'left-msb');
+            bitsIn  = bitsAll.';
+            bitsIn  = bitsIn(:);
 
             syms = mod.modulate(bitsIn);
 
