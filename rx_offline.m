@@ -1,6 +1,7 @@
 clear; clc;
 
-assert(exist('dsp.UDPReceiver','class')==8, 'Install "DSP System Toolbox" for UDP/USRP support.');
+assert(exist('dsp.UDPReceiver','class')==8, ...
+    'Install "DSP System Toolbox" for UDP/USRP support.');
 
 cfg = phyAppConfig();
 
@@ -10,46 +11,52 @@ Decim           = cfg.Link.Decim;
 Fs              = MasterClockRate/Decim;
 
 SamplesPerFrame = cfg.Link.SamplesPerFrame;
-
 rxGain_dB       = cfg.Link.RxGain_dB;
 
 rfSrc = sources.SDRuBasebandSource( ...
-      'IPAddress',        cfg.SDR.RxIPAddress, ...
-      'CenterFrequency',  fc, ...
-      'MasterClockRate',  MasterClockRate, ...
-      'DecimationFactor', Decim, ...
-      'Gain',             rxGain_dB, ...
-      'SamplesPerFrame',  SamplesPerFrame, ...
-      'TransportDataType', 'int8', ...
-      'OutputDataType', 'single');
+    'IPAddress',          cfg.SDR.RxIPAddress, ...
+    'CenterFrequency',    fc, ...
+    'MasterClockRate',    MasterClockRate, ...
+    'DecimationFactor',   Decim, ...
+    'Gain',               rxGain_dB, ...
+    'SamplesPerFrame',    SamplesPerFrame, ...
+    'TransportDataType',  'int8', ...
+    'OutputDataType',     'single');
 
-% ------------------- Capture file -------------------
-ts = datestr(now, 'yyyymmdd_HHMMSS');
-outFile = fullfile(pwd, ['rx_capture_' ts '.mat']);
+% --------- Output files ----------
+ts       = datestr(now, 'yyyymmdd_HHMMSS');
+binFile  = fullfile(pwd, ['rx_capture_' ts '.bin']);   % raw IQ float32 interleaved
+metaFile = fullfile(pwd, ['rx_capture_' ts '.mat']);   % metadata only
 
-mf = matfile(outFile, 'Writable', true);
-
-mf.cfg            = cfg;
-mf.Fs             = Fs;
-mf.fc             = fc;
-mf.SamplesPerFrame= SamplesPerFrame;
-
-mf.x              = complex(single(zeros(0,1)));
-mf.chunkStart     = uint64([]);
-mf.chunkLen       = uint32([]);
-mf.chunkOverrun   = logical([]);
-mf.chunkWallTime  = double([]);
-
+% Capture limits
 maxSeconds = 30;
-maxChunks  = inf;
 printEvery = 50;
 
-fprintf('RX CAPTURE: writing to %s\n', outFile);
+% Rough chunk estimate (safe)
+maxChunksEst = ceil(maxSeconds * Fs / SamplesPerFrame) + 200;
+
+% Metadata buffers in RAM (small)
+chunkStart    = zeros(1, maxChunksEst, 'uint64');   % sample index (1-based) in the continuous stream
+chunkLen      = zeros(1, maxChunksEst, 'uint32');   % number of complex samples in this chunk
+chunkOverrun  = false(1, maxChunksEst);
+chunkWallTime = zeros(1, maxChunksEst, 'double');   % posixtime UTC
+
+% Open binary file
+fid = fopen(binFile, 'Wb');
+assert(fid > 0, 'Could not open %s for writing.', binFile);
+
+% Ensure we clean up even on Ctrl+C / error
+cleanupObj = onCleanup(@() localCleanup(rfSrc, fid));
+
+fprintf('RX CAPTURE:\n  BIN : %s\n  META: %s\n', binFile, metaFile);
+fprintf('Fs=%.3f Hz | SamplesPerFrame=%d | maxSeconds=%d | maxChunksEst=%d\n', ...
+    Fs, SamplesPerFrame, maxSeconds, maxChunksEst);
 fprintf('Ctrl+C to stop.\n');
 
-writePos   = uint64(1);
-chunkIdx   = uint64(0);
-tStart     = tic;
+chunkIdx     = uint64(0);
+writePos     = uint64(1);      % 1-based sample position
+totalSamples = uint64(0);
+tStart       = tic;
 
 try
     while true
@@ -57,32 +64,43 @@ try
             fprintf('Stopping: reached maxSeconds.\n');
             break;
         end
-        if chunkIdx >= maxChunks
-            fprintf('Stopping: reached maxChunks.\n');
+
+        [xRaw, len, over] = rfSrc.readFrame();
+
+        chunkIdx = chunkIdx + 1;
+        if chunkIdx > maxChunksEst
+            fprintf('Stopping: reached maxChunksEst.\n');
             break;
         end
 
-        [xRaw, len, over] = rfSrc.readFrame();
-        chunkIdx = chunkIdx + 1;
-
         xRaw = xRaw(:);
-        N    = uint64(numel(xRaw));
 
-        if N > 0
-            mf.x(writePos:writePos+N-1, 1) = xRaw;
+        % Use len if valid, else fallback
+        if isempty(len) || ~isscalar(len) || len <= 0
+            N = uint32(numel(xRaw));
+        else
+            N = uint32(min(double(len), double(numel(xRaw))));
         end
 
-        mf.chunkStart(1,chunkIdx)    = writePos;
-        mf.chunkLen(1,chunkIdx)      = uint32(N);
-        mf.chunkOverrun(1,chunkIdx)  = logical(over);
-        mf.chunkWallTime(1,chunkIdx) = posixtime(datetime('now'));
+        % Record metadata
+        chunkStart(1, chunkIdx)    = writePos;
+        chunkLen(1, chunkIdx)      = N;
+        chunkOverrun(1, chunkIdx)  = logical(over);
+        chunkWallTime(1, chunkIdx) = posixtime(datetime('now','TimeZone','UTC'));
 
-        writePos = writePos + N;
+        % Write IQ as float32 interleaved: I1,Q1,I2,Q2,...
+        if N > 0
+            xs = xRaw(1:N);
+            iq = [real(xs).'; imag(xs).'];          % 2 x N
+            fwrite(fid, iq, 'float32');
+        end
+
+        writePos     = writePos + uint64(N);
+        totalSamples = totalSamples + uint64(N);
 
         if mod(double(chunkIdx), printEvery) == 0
-            totalSamp = double(writePos-1);
-            fprintf('Captured chunks=%d | samples=%d | lastOverrun=%d\n', ...
-                double(chunkIdx), totalSamp, over);
+            fprintf('Captured chunks=%d | totalSamples=%d | lastLen=%d | lastOverrun=%d\n', ...
+                double(chunkIdx), double(totalSamples), double(N), over);
         end
     end
 
@@ -90,8 +108,41 @@ catch ME
     fprintf('Capture stopped (exception): %s\n', ME.message);
 end
 
-mf.totalChunks  = double(chunkIdx);
-mf.totalSamples = double(writePos-1);
+% Trim metadata arrays
+k = double(chunkIdx);
+chunkStart    = chunkStart(1:k);
+chunkLen      = chunkLen(1:k);
+chunkOverrun  = chunkOverrun(1:k);
+chunkWallTime = chunkWallTime(1:k);
 
-fprintf('DONE. Saved %d samples in %d chunks to:\n  %s\n', ...
-    mf.totalSamples, mf.totalChunks, outFile);
+totalChunks  = double(chunkIdx);
+totalSamples = double(totalSamples);
+
+% Save metadata
+save(metaFile, ...
+    'cfg','Fs','fc','SamplesPerFrame', ...
+    'binFile', ...
+    'chunkStart','chunkLen','chunkOverrun','chunkWallTime', ...
+    'totalChunks','totalSamples', ...
+    '-v7.3');
+
+fprintf('DONE.\n  totalSamples=%d\n  totalChunks=%d\n  BIN : %s\n  MAT : %s\n', ...
+    totalSamples, totalChunks, binFile, metaFile);
+
+% -------- local cleanup --------
+function localCleanup(rfSrcObj, fid)
+    try
+        if fid > 0
+            fclose(fid);
+        end
+    catch
+    end
+    try
+        if ismethod(rfSrcObj, 'release'); release(rfSrcObj); end
+    catch
+    end
+    try
+        if isvalid(rfSrcObj); delete(rfSrcObj); end
+    catch
+    end
+end
