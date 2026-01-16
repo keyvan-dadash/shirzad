@@ -23,6 +23,47 @@ TX and RX at a glance:
 
 ---
 
+## Hardware (what we built and tested)
+
+Below are the RF front-end boards used in the demo tests. The diagrams show the high-level signal flow, and the photos show the assembled PCBs.
+
+### Transmitter (TX)
+
+**TX block diagram**  
+![TX diagram](images/tx_diagram.png)
+
+**TX board (assembled)**  
+![TX board](images/tx.png)
+
+**Key TX RF parts (by stage)**
+
+| Stage | Part |
+|---|---|
+| RF power stage | HMC408LP3 |
+| Upconversion / mixing | HMC1097LP4E |
+| LO source | ADF4372 |
+| IF / driver gain | HMC311ST89 |
+
+### Receiver (RX)
+
+**RX block diagram**  
+![RX diagram](images/rx_diagram.png)
+
+**RX board (assembled)**  
+![RX board](images/rx.png)
+
+**Key RX RF parts (by stage)**
+
+| Stage | Part |
+|---|---|
+| LO source | ADF4372 |
+| Baseband low-pass filter | SBLP-39 |
+| RF input gain (LNA) | ADL5545 |
+| Baseband/IF gain | HMC311ST89 |
+| Downconversion / I/Q demod | ADL5380 |
+
+---
+
 ## TX side (bytes → symbols → USRP)
 
 1. Read bytes from a set of `io.Reader`s (round robin).
@@ -105,12 +146,7 @@ Compute over a sliding window starting at `d`:
 
 Large `M(d)` means “this looks like `[a,a]`”.
 
-**Coarse CFO estimate from S&C** comes from the phase of `P(d)`:
-
-- The phase difference across the repeated halves is approximately `Δφ ≈ angle(P(d))`.
-- That maps to a frequency offset estimate (units depend on your sample rate / symbol rate):
-  - per-sample: `ω̂ ≈ angle(P(d)) / L`  (rad/sample)
-  - per-symbol if you’re already at 1 sps: same shape, different meaning
+**Coarse CFO estimate from S&C** comes from the phase of `P(d)`.
 
 ---
 
