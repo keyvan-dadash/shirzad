@@ -11,7 +11,19 @@ Most of the “orchestration” is in MATLAB, and the heavy/hot-path payload wor
 
 ## Big picture
 
-### TX side (bytes → symbols → USRP)
+### Architecture diagrams
+
+TX and RX at a glance:
+
+**TX architecture**  
+![TX architecture](images/tx_arch.png)
+
+**RX architecture**  
+![RX architecture](images/rx_arch.png)
+
+---
+
+## TX side (bytes → symbols → USRP)
 
 1. Read bytes from a set of `io.Reader`s (round robin).
 2. Wrap the bytes into a small protocol called a **Datagram**.
@@ -26,7 +38,7 @@ TX repeats each frame multiple times because the link is **uni-directional** (no
 
 ---
 
-### RX side (USRP → symbols → bytes → workers)
+## RX side (USRP → symbols → bytes → workers)
 
 1. Read complex baseband from the USRP (and detect **overruns**).
 2. Super-coarse CFO correction at sample-rate (FFT/peak-based “big hammer”).
@@ -38,7 +50,7 @@ TX repeats each frame multiple times because the link is **uni-directional** (no
 8. Remove constant phase (from correlation phase).
 9. Run decision-directed PLL (carrier sync) on payload symbols.
 10. Resolve QAM/QPSK phase ambiguity using pilot bits.
-11. Decode payload → pass to **C++ payload sink**, which:
+11. Decode payload → pass to a **C++ payload sink**, which:
     - viterbi-decodes, descrambles, verifies checksum,
     - routes to the configured worker per `StreamId` (console/file/BER/etc.),
     - can terminate the MATLAB RX when all streams are done.
@@ -148,9 +160,9 @@ Example worker types:
 
 ## Benchmarks / performance
 
-There are benchmark scripts (TX/RX no-USRP style) to measure max throughput per modulation on a given CPU. (I’ll add plots later.)
+There are benchmark scripts (TX/RX no-USRP style) to measure max throughput per modulation on a given CPU.
 
-CPU used in my local benchmarks: **i7-10870H**.
+CPU used in local benchmarks: **i7-10870H**.
 
 ---
 
@@ -160,13 +172,24 @@ Tests were performed in a corridor (~90–100 m), using:
 - USRP: **N210**
 - Antenna: **Dipole**
 
-QPSK:
-- (spectrum + constellation screenshots later)
-- estimated BER ~ `1e-4` (Eb/N0 later)
+Observed performance in the demo configuration:
+- **Application throughput:** ~**10 Mbps** end-to-end (framing + FEC + decode included)
+- **QPSK:** estimated BER ~ `1e-4`, Eb/N0 ≈ **17 dB**
+- **16-QAM:** estimated BER ~ `1e-3`, Eb/N0 ≈ **7 dB**
 
-16-QAM:
-- (spectrum + constellation screenshots later)
-- estimated BER ~ `1e-3` (Eb/N0 later)
+### Receiver screenshots (constellation + spectrum)
+
+**QPSK**
+- Constellation:  
+  ![QPSK constellation](images/qpsk.png)
+- Spectrum:  
+  ![QPSK spectrum](images/qpsk-spec.png)
+
+**16-QAM**
+- Constellation:  
+  ![16-QAM constellation](images/16qam.png)
+- Spectrum:  
+  ![16-QAM spectrum](images/16qam-spec.png)
 
 In all tests: text, PDF, and video were sent successfully.
 
@@ -190,7 +213,6 @@ In all tests: text, PDF, and video were sent successfully.
 
 ## TODO / next steps
 
-- Add the architecture images for TX and RX.
-- Add benchmark plots for QPSK / 16-QAM.
-- Add measured Eb/N0 / Es/N0 reporting in the runtime logs.
+- Add measured Eb/N0 / Es/N0 reporting directly into the runtime logs (not just notes).
 - Make overrun recovery reset the right sync state instead of just dropping.
+- Add a lightweight reliability mode if bidirectional hardware becomes available (ACK/ARQ or selective repeat).
